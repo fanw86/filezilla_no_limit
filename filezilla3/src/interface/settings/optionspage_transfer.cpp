@@ -15,6 +15,9 @@ struct COptionsPageTransfer::impl final
 	wxSpinCtrlEx* downloads_{};
 	wxSpinCtrlEx* uploads_{};
 
+	wxSpinCtrlEx* sftp_segments_{};
+	wxSpinCtrlEx* sftp_segment_min_size_{};
+
 	wxChoice* burst_tolerance_{};
 
 	wxCheckBox* limit_{};
@@ -64,6 +67,22 @@ bool COptionsPageTransfer::CreateControls(wxWindow* parent)
 		impl_->uploads_->SetMaxLength(3);
 		inner->Add(impl_->uploads_, lay.valign);
 		inner->Add(new wxStaticText(box, nullID, _("(0 for no limit)")), lay.valign);
+	}
+
+	{
+		auto [box, inner] = lay.createStatBox(main, _("Segmented SFTP downloads"), 3);
+		inner->Add(new wxStaticText(box, nullID, _("SFTP download &segments:")), lay.valign);
+		impl_->sftp_segments_ = new wxSpinCtrlEx(box, nullID, wxString(), wxDefaultPosition, wxSize(lay.dlgUnits(26), -1));
+		impl_->sftp_segments_->SetRange(1, 8);
+		impl_->sftp_segments_->SetMaxLength(1);
+		inner->Add(impl_->sftp_segments_, lay.valign);
+		inner->Add(new wxStaticText(box, nullID, _("(1 disables segmented downloads)")), lay.valign);
+		inner->Add(new wxStaticText(box, nullID, _("Minimum &size per segment:")), lay.valign);
+		impl_->sftp_segment_min_size_ = new wxSpinCtrlEx(box, nullID, wxString(), wxDefaultPosition, wxSize(lay.dlgUnits(26), -1));
+		impl_->sftp_segment_min_size_->SetRange(1, 1048576);
+		impl_->sftp_segment_min_size_->SetMaxLength(7);
+		inner->Add(impl_->sftp_segment_min_size_, lay.valign);
+		inner->Add(new wxStaticText(box, nullID, _("(in MiB)")), lay.valign);
 	}
 
 	{
@@ -150,6 +169,9 @@ bool COptionsPageTransfer::LoadPage()
 	impl_->downloads_->SetValue(m_pOptions->get_int(OPTION_CONCURRENTDOWNLOADLIMIT));
 	impl_->uploads_->SetValue(m_pOptions->get_int(OPTION_CONCURRENTUPLOADLIMIT));
 
+	impl_->sftp_segments_->SetValue(m_pOptions->get_int(OPTION_SFTP_DOWNLOAD_SEGMENTS));
+	impl_->sftp_segment_min_size_->SetValue(m_pOptions->get_int(OPTION_SFTP_SEGMENT_MIN_SIZE));
+
 	impl_->burst_tolerance_->SetSelection(m_pOptions->get_int(OPTION_SPEEDLIMIT_BURSTTOLERANCE));
 	impl_->burst_tolerance_->Enable(enable_speedlimits);
 
@@ -167,6 +189,9 @@ bool COptionsPageTransfer::SavePage()
 	m_pOptions->set(OPTION_NUMTRANSFERS, impl_->transfers_->GetValue());
 	m_pOptions->set(OPTION_CONCURRENTDOWNLOADLIMIT,	impl_->downloads_->GetValue());
 	m_pOptions->set(OPTION_CONCURRENTUPLOADLIMIT, impl_->uploads_->GetValue());
+
+	m_pOptions->set(OPTION_SFTP_DOWNLOAD_SEGMENTS, impl_->sftp_segments_->GetValue());
+	m_pOptions->set(OPTION_SFTP_SEGMENT_MIN_SIZE, impl_->sftp_segment_min_size_->GetValue());
 
 	m_pOptions->set(OPTION_SPEEDLIMIT_INBOUND, impl_->dllimit_->GetValue().ToStdWstring());
 	m_pOptions->set(OPTION_SPEEDLIMIT_OUTBOUND, impl_->ullimit_->GetValue().ToStdWstring());
@@ -189,6 +214,14 @@ bool COptionsPageTransfer::Validate()
 
 	if (impl_->uploads_->GetValue() < 0 || impl_->uploads_->GetValue() > 999) {
 		return DisplayError(impl_->uploads_, _("Please enter a number between 0 and 999 for the number of concurrent uploads."));
+	}
+
+	if (impl_->sftp_segments_->GetValue() < 1 || impl_->sftp_segments_->GetValue() > 8) {
+		return DisplayError(impl_->sftp_segments_, _("Please enter a number between 1 and 8 for the number of SFTP download segments."));
+	}
+
+	if (impl_->sftp_segment_min_size_->GetValue() < 1 || impl_->sftp_segment_min_size_->GetValue() > 1048576) {
+		return DisplayError(impl_->sftp_segment_min_size_, _("Please enter a number between 1 and 1048576 for the minimum size per segment."));
 	}
 
 	if (fz::to_integral<int>(impl_->dllimit_->GetValue().ToStdWstring(), -1) < 0) {

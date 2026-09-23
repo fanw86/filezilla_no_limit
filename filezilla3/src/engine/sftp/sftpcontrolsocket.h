@@ -47,6 +47,10 @@ protected:
 	std::unique_ptr<fz::ssh::client> ssh_;
 	std::unique_ptr<fz::ssh::sftp::sftp_client> sftp_;
 
+	// The primary connection's host key as verified by the user, used to
+	// validate additional segment connections without further prompts
+	std::string verified_hostkey_;
+
 	friend class CSftpOpData;
 	friend class CProtocolOpData<CSftpControlSocket>;
 	friend class CSftpChmodOpData;
@@ -57,6 +61,7 @@ protected:
 	friend class CSftpMkdirOpData;
 	friend class CSftpRenameOpData;
 	friend class CSftpRemoveDirOpData;
+	friend class segment_connection;
 };
 
 class CSftpOpData : public CProtocolOpData<CSftpControlSocket>, public fz::ssh::sftp::response_handler, public fz::event_handler

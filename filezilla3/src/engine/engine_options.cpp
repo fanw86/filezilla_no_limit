@@ -70,7 +70,9 @@ unsigned int register_engine_options()
 		{ "TCP Keepalive Interval", 15, option_flags::numeric_clamp, 1, 10000 },
 		{ "Cache TTL", 600, option_flags::numeric_clamp, 30, 60*60*24 },
 		{ "Minimum TLS Version", 2, option_flags::numeric_clamp, 0, 3 },
-		{ "Directory listing item limit", 10000000, option_flags::numeric_clamp, 1000000, 2000000000 }
+		{ "Directory listing item limit", 10000000, option_flags::numeric_clamp, 1000000, 2000000000 },
+		{ "SFTP download segments", 1, option_flags::numeric_clamp, 1, 8 },
+		{ "SFTP segment min size", 64, option_flags::numeric_clamp, 1, 1048576 }
 	});
 	return value;
 }

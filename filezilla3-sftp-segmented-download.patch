@@ -1,0 +1,1777 @@
+diff --git a/src/engine/Makefile.am b/src/engine/Makefile.am
+index de86700..a42a3da 100644
+--- a/src/engine/Makefile.am
++++ b/src/engine/Makefile.am
+@@ -104,6 +104,7 @@ libfzclient_private_la_SOURCES += \
+ 		sftp/mkd.cpp \
+ 		sftp/rename.cpp \
+ 		sftp/rmd.cpp \
++		sftp/segment_connection.cpp \
+ 		sftp/sftpcontrolsocket.cpp
+ 
+ noinst_HEADERS += \
+@@ -115,6 +116,7 @@ noinst_HEADERS += \
+ 		sftp/mkd.h \
+ 		sftp/rename.h \
+ 		sftp/rmd.h \
++		sftp/segment_connection.h \
+ 		sftp/sftpcontrolsocket.h
+ endif
+ 
+diff --git a/src/engine/engine_options.cpp b/src/engine/engine_options.cpp
+index 5c6e3d4..d5f4b22 100644
+--- a/src/engine/engine_options.cpp
++++ b/src/engine/engine_options.cpp
+@@ -70,7 +70,9 @@ unsigned int register_engine_options()
+ 		{ "TCP Keepalive Interval", 15, option_flags::numeric_clamp, 1, 10000 },
+ 		{ "Cache TTL", 600, option_flags::numeric_clamp, 30, 60*60*24 },
+ 		{ "Minimum TLS Version", 2, option_flags::numeric_clamp, 0, 3 },
+-		{ "Directory listing item limit", 10000000, option_flags::numeric_clamp, 1000000, 2000000000 }
++		{ "Directory listing item limit", 10000000, option_flags::numeric_clamp, 1000000, 2000000000 },
++		{ "SFTP download segments", 1, option_flags::numeric_clamp, 1, 8 },
++		{ "SFTP segment min size", 64, option_flags::numeric_clamp, 1, 1048576 }
+ 	});
+ 	return value;
+ }
+diff --git a/src/engine/sftp/filetransfer.cpp b/src/engine/sftp/filetransfer.cpp
+index 55ef628..b2f7dba 100644
+--- a/src/engine/sftp/filetransfer.cpp
++++ b/src/engine/sftp/filetransfer.cpp
+@@ -5,8 +5,10 @@
+ 
+ #include "../../include/engine_options.h"
+ 
++#include <libfilezilla/file.hpp>
+ #include <libfilezilla/local_filesys.hpp>
+ #include <libfilezilla/process.hpp>
++#include <libfilezilla/string.hpp>
+ 
+ #include <assert.h>
+ 
+@@ -21,6 +23,8 @@ enum filetransferStates
+ 	filetransfer_mkdir,
+ 	filetransfer_checkoverwrite,
+ 	filetransfer_transfer,
++	filetransfer_segmented,
++	filetransfer_concat,
+ };
+ 
+ struct can_send_event_type{};
+@@ -31,6 +35,7 @@ CSftpFileTransferOpData::~CSftpFileTransferOpData()
+ {
+ 	remove_handler();
+ 	reader_.reset();
++	cleanup_segments();
+ 	if (sftp_) {
+ 		sftp_->cancel_wait(this);
+ 	}
+@@ -69,6 +74,20 @@ int CSftpFileTransferOpData::Send()
+ 		return FZ_REPLY_CONTINUE;
+ 	}
+ 	else if (opState == filetransfer_transfer) {
++		if (download()) {
++			size_t const segments = segment_count();
++			if (segments > 1) {
++				return start_segmented(segments);
++			}
++			if (!resume_) {
++				// Fresh single-stream download, delete stale parts from
++				// interrupted segmented downloads.
++				if (fz::local_filesys::get_size(fz::to_native(segment_manifest_path())) >= 0) {
++					delete_segment_files(max_segment_count_);
++				}
++			}
++		}
++
+ 		// Bit convoluted as we need to use server encoding for remote filenames.
+ 		std::string remoteFile;
+ 		std::wstring logstr;
+@@ -245,6 +264,21 @@ void CSftpFileTransferOpData::operator()(fz::event_base const& ev)
+ 
+ void CSftpFileTransferOpData::OnBufferAvailability(fz::aio_waitable const* w)
+ {
++	if (opState == filetransfer_concat) {
++		if (w == writer_.get()) {
++			if (concat_finalizing_) {
++				concat_finalize();
++			}
++			else {
++				concat_pump();
++			}
++		}
++		else if (w == reader_.get()) {
++			concat_pump();
++		}
++		return;
++	}
++
+ 	if (w == reader_.get()) {
+ 		on_can_send(nullptr);
+ 	}
+@@ -268,9 +302,50 @@ int CSftpFileTransferOpData::Reset(int result)
+ 		sftp_->close(nullptr, handle_);
+ 	}
+ 	handle_.clear();
++
++	if (download()) {
++		if (result == FZ_REPLY_OK && opState != filetransfer_segmented && opState != filetransfer_concat) {
++			// Finished single-stream download, remove stale parts of interrupted segmented downloads
++			if (fz::local_filesys::get_size(fz::to_native(segment_manifest_path())) >= 0) {
++				delete_segment_files(max_segment_count_);
++			}
++		}
++		else if (result != FZ_REPLY_OK && opState == filetransfer_concat) {
++			// The partially merged file can be reproduced from the parts. Remove it
++			// so that the next attempt resumes the segments instead of going down
++			// the single-stream path.
++			reader_.reset();
++			writer_.reset();
++			fz::remove_file(fz::to_native(localName_), false);
++		}
++	}
++
++	cleanup_segments();
++
+ 	return result;
+ }
+ 
++void CSftpFileTransferOpData::cleanup_segments()
++{
++	for (auto & seg : segments_) {
++		if (auto * channel = segment_channel(*seg)) {
++			channel->cancel(seg.get());
++			if (!seg->handle_.empty()) {
++				channel->close(nullptr, seg->handle_);
++				seg->handle_.clear();
++			}
++		}
++		if (seg->stall_channel_) {
++			// The channel is stalled by a segment waiting for buffers. Unblock it
++			// so that the replies to the cancelled requests can be discarded.
++			seg->stall_channel_->unblock_read();
++			seg->stall_channel_ = nullptr;
++		}
++	}
++	segments_.clear();
++	segment_connections_.clear();
++}
++
+ void CSftpFileTransferOpData::finalize()
+ {
+ 	finalizing_ = true;
+@@ -584,3 +659,762 @@ void CSftpFileTransferOpData::OnTimer(fz::timer_id)
+ 	}
+ #endif
+ }
++
++CSftpFileTransferOpData::segment_handler::segment_handler(CSftpFileTransferOpData & op, size_t index, uint64_t offset, uint64_t length)
++	: fz::event_handler(op.controlSocket_, fz::child_event_handler)
++	, op_(op)
++	, index_(index)
++	, offset_(offset)
++	, length_(length)
++	, request_offset_(offset)
++{
++}
++
++CSftpFileTransferOpData::segment_handler::~segment_handler()
++{
++	remove_handler();
++	if (op_.controlSocket_.buffer_pool_) {
++		op_.controlSocket_.buffer_pool_->remove_waiter(*this);
++	}
++	writer_.reset();
++}
++
++fz::ssh::sftp::continuation CSftpFileTransferOpData::segment_handler::process_status(fz::ssh::sftp::status_code code, std::string_view description)
++{
++	return op_.process_segment_status(*this, code, fz::to_wstring(description));
++}
++
++fz::ssh::sftp::continuation CSftpFileTransferOpData::segment_handler::process_handle(std::string_view handle)
++{
++	return op_.on_segment_open(*this, handle);
++}
++
++fz::ssh::sftp::continuation CSftpFileTransferOpData::segment_handler::process_data(std::string_view data)
++{
++	return op_.process_segment_data(*this, data);
++}
++
++fz::ssh::sftp::continuation CSftpFileTransferOpData::segment_handler::failure()
++{
++	op_.seg_failed_ = true;
++	op_.trigger_reset(FZ_REPLY_ERROR);
++	return fz::ssh::sftp::continuation::next;
++}
++
++void CSftpFileTransferOpData::segment_handler::operator()(fz::event_base const& ev)
++{
++	fz::dispatch<fz::aio_buffer_event>(ev, this, &segment_handler::OnBufferAvailability);
++}
++
++void CSftpFileTransferOpData::segment_handler::OnBufferAvailability(fz::aio_waitable const* w)
++{
++	op_.on_segment_buffer_availability(*this, w);
++}
++
++size_t CSftpFileTransferOpData::segment_count() const
++{
++	if (!download() || resume_ || remoteFileSize_ <= 0 || localFileSize_ != fz::aio_base::nosize) {
++		return 1;
++	}
++
++	int const wanted = options_.get_int(OPTION_SFTP_DOWNLOAD_SEGMENTS);
++	if (wanted < 2) {
++		return 1;
++	}
++
++	uint64_t const total = static_cast<uint64_t>(remoteFileSize_);
++	uint64_t const minsize = static_cast<uint64_t>(options_.get_int(OPTION_SFTP_SEGMENT_MIN_SIZE)) * 1024 * 1024;
++
++	size_t n = static_cast<size_t>(wanted);
++	while (n > 1 && total < n * minsize) {
++		--n;
++	}
++	return n;
++}
++
++std::wstring CSftpFileTransferOpData::segment_manifest_path() const
++{
++	return localName_ + L".fzseg";
++}
++
++std::wstring CSftpFileTransferOpData::segment_part_path(size_t i) const
++{
++	return fz::sprintf(L"%s.fzseg%d", localName_, static_cast<int>(i));
++}
++
++void CSftpFileTransferOpData::delete_segment_files(size_t count)
++{
++	for (size_t i = 0; i < count; ++i) {
++		fz::remove_file(fz::to_native(segment_part_path(i)), false);
++	}
++	fz::remove_file(fz::to_native(segment_manifest_path()), false);
++}
++
++bool CSftpFileTransferOpData::read_segment_manifest(uint64_t total)
++{
++	fz::file f(fz::to_native(segment_manifest_path()), fz::file::reading);
++	if (!f.opened()) {
++		return false;
++	}
++
++	int64_t const size = f.size();
++	if (size <= 0 || size > 64 * 1024) {
++		return false;
++	}
++
++	std::string data;
++	data.resize(static_cast<size_t>(size));
++	size_t read = 0;
++	while (read < data.size()) {
++		auto const r = f.read2(data.data() + read, data.size() - read);
++		if (!r || !r.value_) {
++			return false;
++		}
++		read += r.value_;
++	}
++
++	auto parse_pair = [](std::string_view line, uint64_t & a, uint64_t & b) {
++		auto toks = fz::strtokenizer(line, " "sv, true);
++		auto it = toks.begin();
++		if (it == toks.end()) {
++			return false;
++		}
++		a = fz::to_integral<uint64_t>(*it, fz::aio_base::nosize);
++		++it;
++		if (it == toks.end()) {
++			return false;
++		}
++		b = fz::to_integral<uint64_t>(*it, fz::aio_base::nosize);
++		++it;
++		return it == toks.end() && a != fz::aio_base::nosize && b != fz::aio_base::nosize;
++	};
++
++	auto lines = fz::strtokenizer(data, "\r\n"sv, true);
++	auto it = lines.begin();
++	if (it == lines.end() || *it != "fzseg1"sv) {
++		return false;
++	}
++	++it;
++
++	uint64_t mtotal{};
++	uint64_t mcount{};
++	if (it == lines.end() || !parse_pair(*it, mtotal, mcount)) {
++		return false;
++	}
++	++it;
++
++	if (mtotal != total || mcount != segments_.size()) {
++		return false;
++	}
++
++	for (auto & seg : segments_) {
++		if (it == lines.end()) {
++			return false;
++		}
++		uint64_t moffset{};
++		uint64_t mlength{};
++		if (!parse_pair(*it, moffset, mlength) || moffset != seg->offset_ || mlength != seg->length_) {
++			return false;
++		}
++		++it;
++	}
++
++	return it == lines.end();
++}
++
++bool CSftpFileTransferOpData::write_segment_manifest(uint64_t total)
++{
++	std::string data = "fzseg1\n";
++	data += std::to_string(total) + " " + std::to_string(segments_.size()) + "\n";
++	for (auto & seg : segments_) {
++		data += std::to_string(seg->offset_) + " " + std::to_string(seg->length_) + "\n";
++	}
++
++	fz::file f(fz::to_native(segment_manifest_path()), fz::file::writing, fz::file::empty);
++	if (!f.opened()) {
++		return false;
++	}
++
++	size_t written = 0;
++	while (written < data.size()) {
++		auto const w = f.write2(data.data() + written, data.size() - written);
++		if (!w || !w.value_) {
++			return false;
++		}
++		written += w.value_;
++	}
++	return true;
++}
++
++int CSftpFileTransferOpData::start_segmented(size_t count)
++{
++	uint64_t const total = static_cast<uint64_t>(remoteFileSize_);
++
++	std::string const remoteFile = controlSocket_.ConvToServer(remotePath_.FormatFilename(remoteFile_));
++	if (remoteFile.empty()) {
++		log(logmsg::error, _("Could not convert command to server encoding"));
++		return FZ_REPLY_ERROR;
++	}
++
++	// Deterministic equal split of the file into contiguous ranges
++	uint64_t const base = total / count;
++	uint64_t const remainder = total % count;
++	uint64_t pos = 0;
++	for (size_t i = 0; i < count; ++i) {
++		uint64_t const length = base + (i < remainder ? 1 : 0);
++		segments_.push_back(std::make_unique<segment_handler>(*this, i, pos, length));
++		pos += length;
++	}
++
++	bool resume_valid = read_segment_manifest(total);
++	if (resume_valid) {
++		for (size_t i = 0; i < count; ++i) {
++			int64_t const size = fz::local_filesys::get_size(fz::to_native(segment_part_path(i)));
++			uint64_t const part_size = (size > 0) ? static_cast<uint64_t>(size) : 0;
++			if (part_size > segments_[i]->length_) {
++				resume_valid = false;
++				break;
++			}
++			segments_[i]->part_size_ = part_size;
++		}
++	}
++
++	if (!resume_valid) {
++		delete_segment_files(max_segment_count_);
++		if (!write_segment_manifest(total)) {
++			log(logmsg::error, fztranslate("Could not write the segment manifest file"));
++			return FZ_REPLY_WRITEFAILED;
++		}
++	}
++
++	uint64_t resumed = 0;
++	for (size_t i = 0; i < count; ++i) {
++		auto & seg = *segments_[i];
++		resumed += seg.part_size_;
++		seg.received_ = seg.part_size_;
++		seg.request_offset_ = seg.offset_ + seg.part_size_;
++		seg.writer_factory_ = std::make_unique<fz::file_writer_factory>(segment_part_path(i), engine_.GetThreadPool());
++		if (seg.part_size_ >= seg.length_) {
++			seg.done_ = true;
++			++segments_done_;
++		}
++	}
++
++	engine_.transfer_status_.Init(remoteFileSize_, resumed, false);
++	engine_.transfer_status_.SetStartTime();
++	transferInitiated_ = true;
++	controlSocket_.SetWait(true);
++
++	std::wstring logstr = L"get ";
++	logstr += controlSocket_.QuoteFilename(remotePath_.FormatFilename(remoteFile_)) + L" ";
++	logstr += controlSocket_.QuoteFilename(localName_);
++	controlSocket_.log_raw(logmsg::command, logstr);
++	log(logmsg::status, fztranslate("Downloading file in %d segments"), static_cast<int>(count));
++
++	opState = filetransfer_segmented;
++
++	if (segments_done_ == count) {
++		start_concat();
++		return FZ_REPLY_WOULDBLOCK;
++	}
++
++	segmented_remote_file_ = remoteFile;
++
++	for (auto & seg : segments_) {
++		if (!seg->done_) {
++			sftp_->open(seg.get(), remoteFile, fz::ssh::sftp::file_flags::SSH_FXF_READ);
++		}
++	}
++
++	// Bring up additional connections for the segments, one at a time
++	start_next_segment_connection();
++
++	return FZ_REPLY_WOULDBLOCK;
++}
++
++CSftpOpData::continuation CSftpFileTransferOpData::on_segment_open(segment_handler & seg, std::string_view handle)
++{
++	controlSocket_.SetAlive();
++
++	seg.handle_ = handle;
++
++	if (seg_failed_) {
++		return continuation::next;
++	}
++
++	if (!seg.writer_) {
++		seg.writer_ = controlSocket_.OpenWriter(seg.writer_factory_, seg.part_size_, true);
++		if (!seg.writer_) {
++			seg_failed_ = true;
++			trigger_reset(FZ_REPLY_WRITEFAILED);
++			return continuation::next;
++		}
++
++		fz::aio_result r = get_next_segment_buffer(seg);
++		if (r == fz::aio_result::wait) {
++			seg.stall_channel_ = segment_channel(seg);
++			return continuation::wait;
++		}
++		if (r == fz::aio_result::error) {
++			return continuation::next;
++		}
++	}
++
++	request_segments(seg.conn_);
++	return continuation::next;
++}
++
++CSftpOpData::continuation CSftpFileTransferOpData::process_segment_data(segment_handler & seg, std::string_view data)
++{
++	controlSocket_.SetAlive();
++
++	if (seg_failed_) {
++		return continuation::next;
++	}
++
++	if (data.size() > blocksize_) {
++		log(fz::logmsg::error, L"Server sent a block of data larger than requested."sv);
++		return continuation::error;
++	}
++
++	if (seg.outstanding_.empty() || !seg.buffer_) {
++		log(fz::logmsg::error, L"Server sent unexpected data."sv);
++		return continuation::error;
++	}
++
++	uint32_t const expected = seg.outstanding_.front();
++	seg.outstanding_.pop_front();
++
++	if (data.size() > expected) {
++		log(fz::logmsg::error, L"Server sent a block of data larger than requested."sv);
++		return continuation::error;
++	}
++
++	if (data.size() < expected) {
++		// Requests tile the segment exactly and the part file is sequential-append,
++		// so a short read would leave a hole that could never be repaired.
++		log(fz::logmsg::error, fztranslate("Got a short read not at the end of a file, this is not permissiable on normal files"));
++		seg_failed_ = true;
++		trigger_reset(FZ_REPLY_ERROR);
++		return continuation::next;
++	}
++
++	seg.buffer_->append(data);
++
++	seg.received_ += data.size();
++	segment_pipe(seg).response_offset_ += data.size();
++
++	if (seg.received_ >= seg.length_) {
++		finalize_segment(seg);
++		return continuation::next;
++	}
++
++	if (seg.buffer_->capacity() - seg.buffer_->size() < blocksize_) {
++		fz::aio_result r = get_next_segment_buffer(seg);
++		if (r == fz::aio_result::wait) {
++			seg.stall_channel_ = segment_channel(seg);
++			return continuation::wait;
++		}
++		else if (r == fz::aio_result::error) {
++			return continuation::next;
++		}
++	}
++
++	request_segments(seg.conn_);
++
++	return continuation::next;
++}
++
++CSftpOpData::continuation CSftpFileTransferOpData::process_segment_status(segment_handler & seg, fz::ssh::sftp::status_code code, std::wstring_view msg)
++{
++	controlSocket_.SetAlive();
++
++	if (seg.handle_.empty()) {
++		log(logmsg::error, fztranslate("Could not open remote file: %s"), msg);
++		if (seg.received_ == seg.part_size_) {
++			log(logmsg::status, fztranslate("The server may limit the number of concurrently open files. Lowering the number of SFTP download segments in the settings might help."));
++		}
++		seg_failed_ = true;
++		trigger_reset(FZ_REPLY_ERROR);
++	}
++	else if (code == fz::ssh::sftp::status_code::SSH_FX_EOF) {
++		if (!seg.outstanding_.empty()) {
++			seg.outstanding_.pop_front();
++		}
++		if (seg.received_ >= seg.length_) {
++			finalize_segment(seg);
++		}
++		else {
++			log(logmsg::error, fztranslate("Remote file ended before the segment was complete"));
++			seg_failed_ = true;
++			trigger_reset(FZ_REPLY_ERROR);
++		}
++	}
++	else {
++		log(logmsg::error, fztranslate("Could not read from remote file: %s"), msg);
++		seg_failed_ = true;
++		trigger_reset(FZ_REPLY_ERROR);
++	}
++
++	return continuation::next;
++}
++
++fz::aio_result CSftpFileTransferOpData::get_next_segment_buffer(segment_handler & seg)
++{
++	fz::aio_result r = seg.writer_->add_buffer(std::move(seg.buffer_), seg);
++	if (r == fz::aio_result::ok) {
++		seg.buffer_ = controlSocket_.buffer_pool_->get_buffer(seg);
++		if (!seg.buffer_) {
++			r = fz::aio_result::wait;
++		}
++	}
++	if (r == fz::aio_result::error) {
++		log(logmsg::error, fztranslate("Could not write to local file"));
++		seg_failed_ = true;
++		trigger_reset(FZ_REPLY_WRITEFAILED);
++	}
++	return r;
++}
++
++void CSftpFileTransferOpData::finalize_segment(segment_handler & seg)
++{
++	seg.finalizing_ = true;
++	fz::aio_result r = seg.writer_->add_buffer(std::move(seg.buffer_), seg);
++	if (r == fz::aio_result::ok) {
++		r = seg.writer_->finalize(seg);
++	}
++	if (r == fz::aio_result::error) {
++		log(logmsg::error, fztranslate("Could not write to local file"));
++		seg_failed_ = true;
++		trigger_reset(FZ_REPLY_WRITEFAILED);
++	}
++	else if (r == fz::aio_result::ok) {
++		seg.writer_.reset();
++		seg.done_ = true;
++		++segments_done_;
++		if (segments_done_ == segments_.size()) {
++			start_concat();
++		}
++	}
++}
++
++fz::ssh::sftp::sftp_client* CSftpFileTransferOpData::segment_channel(segment_handler & seg)
++{
++	return seg.conn_ ? seg.conn_->sftp_.get() : sftp_.get();
++}
++
++segment_pipe_state & CSftpFileTransferOpData::segment_pipe(segment_handler & seg)
++{
++	return seg.conn_ ? seg.conn_->pipe_ : primary_pipe_;
++}
++
++CSftpFileTransferOpData::segment_handler* CSftpFileTransferOpData::next_request_segment(segment_connection* conn)
++{
++	size_t const count = segments_.size();
++	auto & pipe = conn ? conn->pipe_ : primary_pipe_;
++	for (size_t i = 0; i < count; ++i) {
++		size_t const idx = (pipe.next_segment_ + i) % count;
++		auto & seg = *segments_[idx];
++		if (seg.conn_ == conn && !seg.handle_.empty() && !seg.finalizing_ && !seg.done_ && seg.buffer_ &&
++			seg.request_offset_ < seg.offset_ + seg.length_)
++		{
++			pipe.next_segment_ = (idx + 1) % count;
++			return &seg;
++		}
++	}
++	return nullptr;
++}
++
++void CSftpFileTransferOpData::request_segments(segment_connection* conn)
++{
++	if (seg_failed_) {
++		return;
++	}
++
++	auto & pipe = conn ? conn->pipe_ : primary_pipe_;
++	auto * sftp = conn ? conn->sftp_.get() : sftp_.get();
++	if (!sftp) {
++		return;
++	}
++
++	if (pipe.rtt_requested_ && pipe.response_offset_ >= pipe.rtt_offset_) {
++		// We've got the RTT
++		auto ms = (fz::monotonic_clock::now() - pipe.rtt_requested_).get_milliseconds();
++		pipe.rtt_requested_ = fz::monotonic_clock();
++
++		if (ms < 1) {
++			ms = 1;
++		}
++
++		// Aim for 500ms between queuing the request and the reply
++		size_t ideal_pending = pipe.max_pending_ * 500 / ms;
++
++		if (ideal_pending > pipe.max_pending_) {
++			size_t divisor = (ideal_pending > pipe.max_pending_ * 2) ? 2 : 8;
++			pipe.max_pending_ += pipe.max_pending_ / divisor;
++			if (pipe.max_pending_ > 1024*16) {
++				pipe.max_pending_ = 1024*16;
++			}
++		}
++		else if (ideal_pending < pipe.max_pending_) {
++			size_t divisor = (ideal_pending * 2 < pipe.max_pending_) ? 2 : 8;
++			pipe.max_pending_ -= pipe.max_pending_ / divisor;
++			if (pipe.max_pending_ < initial_max_pending_) {
++				pipe.max_pending_ = initial_max_pending_;
++			}
++		}
++	}
++	else if (pipe.rtt_requested_ && pipe.response_offset_ == pipe.requested_offset_) {
++		// All requests have been answered without reaching the measurement mark,
++		// it can no longer be reached. Abandon the measurement.
++		pipe.rtt_requested_ = fz::monotonic_clock();
++	}
++
++	size_t i{};
++	for (i = 0; i < 2 && sftp->pending_requests() < pipe.max_pending_ && sftp->can_send_packets(); ++i) {
++		segment_handler* seg = next_request_segment(conn);
++		if (!seg) {
++			break;
++		}
++		uint64_t const remaining = seg->offset_ + seg->length_ - seg->request_offset_;
++		uint32_t const size = static_cast<uint32_t>(std::min<uint64_t>(blocksize_, remaining));
++		seg->outstanding_.push_back(size);
++		sftp->read(seg, seg->handle_, seg->request_offset_, size);
++		seg->request_offset_ += size;
++		pipe.requested_offset_ += size;
++	}
++
++	if (i && sftp->pending_requests() == pipe.max_pending_ && !pipe.rtt_requested_) {
++		// Begin RTT measurement at full capacity
++		pipe.rtt_requested_ = fz::monotonic_clock::now();
++		pipe.rtt_offset_ = pipe.requested_offset_;
++	}
++}
++
++void CSftpFileTransferOpData::on_segment_buffer_availability(segment_handler & seg, fz::aio_waitable const* w)
++{
++	if (seg_failed_) {
++		return;
++	}
++
++	if (w == seg.writer_.get()) {
++		if (seg.finalizing_) {
++			finalize_segment(seg);
++		}
++		else {
++			fz::aio_result r = get_next_segment_buffer(seg);
++			if (r == fz::aio_result::ok) {
++				if (seg.stall_channel_) {
++					seg.stall_channel_->unblock_read();
++					seg.stall_channel_ = nullptr;
++				}
++				request_segments(seg.conn_);
++			}
++		}
++	}
++	else if (!seg.buffer_ && !seg.finalizing_ && !seg.done_) {
++		// The segment was waiting for a buffer from the pool while its writer was idle
++		seg.buffer_ = controlSocket_.buffer_pool_->get_buffer(seg);
++		if (seg.buffer_) {
++			if (seg.stall_channel_) {
++				seg.stall_channel_->unblock_read();
++				seg.stall_channel_ = nullptr;
++			}
++			request_segments(seg.conn_);
++		}
++	}
++}
++
++void CSftpFileTransferOpData::migrate_segment(segment_handler & seg, segment_connection & conn)
++{
++	if (auto * old = segment_channel(seg)) {
++		old->cancel(&seg);
++		if (!seg.handle_.empty()) {
++			old->close(nullptr, seg.handle_);
++			seg.handle_.clear();
++		}
++	}
++
++	// The cancelled requests will never be answered, keep the old
++	// channel's pipelining counters balanced
++	uint64_t lost = 0;
++	for (auto s : seg.outstanding_) {
++		lost += s;
++	}
++	segment_pipe(seg).requested_offset_ -= lost;
++	seg.outstanding_.clear();
++
++	seg.request_offset_ = seg.offset_ + seg.received_;
++	seg.conn_ = &conn;
++	conn.sftp_->open(&seg, segmented_remote_file_, fz::ssh::sftp::file_flags::SSH_FXF_READ);
++}
++
++void CSftpFileTransferOpData::start_next_segment_connection()
++{
++	if (opState != filetransfer_segmented || seg_failed_) {
++		return;
++	}
++	if (segment_connections_.size() + 1 < segments_.size()) {
++		segment_connections_.push_back(std::make_unique<segment_connection>(*this, controlSocket_));
++		segment_connections_.back()->start();
++	}
++}
++
++void CSftpFileTransferOpData::on_segment_connection_ready(segment_connection & conn)
++{
++	if (opState != filetransfer_segmented || seg_failed_) {
++		return;
++	}
++
++	size_t target = 0;
++	for (size_t i = 0; i < segment_connections_.size(); ++i) {
++		if (segment_connections_[i].get() == &conn) {
++			target = i + 1;
++			break;
++		}
++	}
++	if (!target) {
++		return;
++	}
++
++	log(logmsg::status, fztranslate("Established additional connection %d of %d for the segmented download"), static_cast<int>(target), static_cast<int>(segments_.size() - 1));
++
++	for (auto & seg : segments_) {
++		if (!seg->conn_ && !seg->done_ && !seg->finalizing_ && seg->index_ == target) {
++			migrate_segment(*seg, conn);
++		}
++	}
++
++	start_next_segment_connection();
++}
++
++void CSftpFileTransferOpData::on_segment_connection_failed(segment_connection &)
++{
++	// The server may limit the number of concurrent connections. The segments
++	// stay on the remaining connections.
++	if (opState != filetransfer_segmented || seg_failed_) {
++		return;
++	}
++	log(logmsg::status, fztranslate("Could not establish an additional connection, continuing the segmented download with fewer connections"));
++	start_next_segment_connection();
++}
++
++void CSftpFileTransferOpData::on_segment_connection_dropped(segment_connection &)
++{
++	if (opState != filetransfer_segmented || seg_failed_) {
++		return;
++	}
++	log(logmsg::error, fztranslate("An additional connection of the segmented download was lost"));
++	seg_failed_ = true;
++	trigger_reset(FZ_REPLY_ERROR);
++}
++
++void CSftpFileTransferOpData::on_segment_hostkey_mismatch()
++{
++	seg_failed_ = true;
++	trigger_reset(FZ_REPLY_CRITICALERROR);
++}
++
++void CSftpFileTransferOpData::start_concat()
++{
++	opState = filetransfer_concat;
++
++	log(logmsg::status, fztranslate("Merging segments..."));
++
++	for (auto & seg : segments_) {
++		if (!seg->handle_.empty()) {
++			if (auto * channel = segment_channel(*seg)) {
++				channel->close(nullptr, seg->handle_);
++			}
++			seg->handle_.clear();
++		}
++	}
++
++	writer_ = controlSocket_.OpenWriter(writer_factory_, 0, false);
++	if (!writer_) {
++		trigger_reset(FZ_REPLY_WRITEFAILED);
++		return;
++	}
++
++	concat_part_ = 0;
++	concat_received_ = 0;
++	concat_pump();
++}
++
++void CSftpFileTransferOpData::concat_pump()
++{
++	while (opState == filetransfer_concat && !concat_finalizing_) {
++		if (!reader_) {
++			if (concat_part_ >= segments_.size()) {
++				if (concat_received_ != static_cast<uint64_t>(remoteFileSize_)) {
++					log(logmsg::error, fztranslate("Downloaded segments are incomplete"));
++					trigger_reset(FZ_REPLY_ERROR);
++					return;
++				}
++				concat_finalize();
++				return;
++			}
++
++			concat_reader_factory_ = std::make_unique<fz::file_reader_factory>(segment_part_path(concat_part_), engine_.GetThreadPool());
++			reader_ = concat_reader_factory_->open(*controlSocket_.buffer_pool_, 0, fz::aio_base::nosize, controlSocket_.max_buffer_count());
++			if (!reader_) {
++				log(logmsg::error, fztranslate("Could not open segment file for reading"));
++				trigger_reset(FZ_REPLY_ERROR);
++				return;
++			}
++			++concat_part_;
++		}
++
++		if (!buffer_) {
++			fz::aio_result r;
++			std::tie(r, buffer_) = reader_->get_buffer(*this);
++			if (r == fz::aio_result::wait) {
++				return;
++			}
++			if (r == fz::aio_result::error) {
++				log(logmsg::error, fztranslate("Could not read from local file"));
++				trigger_reset(FZ_REPLY_ERROR);
++				return;
++			}
++			if (buffer_->empty()) {
++				buffer_.release();
++				reader_.reset();
++				continue;
++			}
++		}
++
++		concat_received_ += buffer_->size();
++
++		fz::aio_result const r = writer_->add_buffer(std::move(buffer_), *this);
++		if (r == fz::aio_result::error) {
++			log(logmsg::error, fztranslate("Could not write to local file"));
++			trigger_reset(FZ_REPLY_WRITEFAILED);
++			return;
++		}
++		if (r == fz::aio_result::wait) {
++			return;
++		}
++	}
++}
++
++void CSftpFileTransferOpData::concat_finalize()
++{
++	concat_finalizing_ = true;
++	fz::aio_result const r = writer_->finalize(*this);
++	if (r == fz::aio_result::error) {
++		log(logmsg::error, fztranslate("Could not write to local file"));
++		trigger_reset(FZ_REPLY_WRITEFAILED);
++		return;
++	}
++	if (r == fz::aio_result::ok) {
++		if (options_.get_int(OPTION_PRESERVE_TIMESTAMPS) && remoteFileTime_) {
++			if (!writer_->set_mtime(remoteFileTime_)) {
++				log(logmsg::debug_warning, L"Could not set modification time");
++			}
++		}
++		reader_.reset();
++		writer_.reset();
++		delete_segment_files(segments_.size());
++		trigger_reset(FZ_REPLY_OK);
++	}
++}
+diff --git a/src/engine/sftp/filetransfer.h b/src/engine/sftp/filetransfer.h
+index ef230eb..75b1e2c 100644
+--- a/src/engine/sftp/filetransfer.h
++++ b/src/engine/sftp/filetransfer.h
+@@ -1,7 +1,10 @@
+ #ifndef FILEZILLA_ENGINE_SFTP_FILETRANSFER_HEADER
+ #define FILEZILLA_ENGINE_SFTP_FILETRANSFER_HEADER
+ 
+-#include "sftpcontrolsocket.h"
++#include "segment_connection.h"
++
++#include <deque>
++#include <vector>
+ 
+ class CSftpFileTransferOpData final : public CFileTransferOpData, public CSftpOpData
+ {
+@@ -36,6 +39,85 @@ private:
+ 
+ 	int CheckRemoteFile(bool after_listing);
+ 
++	// Segmented downloads
++	class segment_handler final : public fz::ssh::sftp::response_handler, public fz::event_handler
++	{
++	public:
++		segment_handler(CSftpFileTransferOpData & op, size_t index, uint64_t offset, uint64_t length);
++		~segment_handler();
++
++		virtual fz::ssh::sftp::continuation process_status(fz::ssh::sftp::status_code, std::string_view description) override;
++		virtual fz::ssh::sftp::continuation process_handle(std::string_view handle) override;
++		virtual fz::ssh::sftp::continuation process_data(std::string_view data) override;
++		virtual fz::ssh::sftp::continuation failure() override;
++
++		virtual void operator()(fz::event_base const& ev) override;
++		void OnBufferAvailability(fz::aio_waitable const* w);
++
++		CSftpFileTransferOpData & op_;
++
++		size_t const index_{};
++
++		uint64_t const offset_{};
++		uint64_t const length_{};
++		uint64_t received_{};
++		uint64_t part_size_{};
++		uint64_t request_offset_{};
++
++		// nullptr: the primary connection
++		segment_connection* conn_{};
++
++		std::string handle_;
++
++		fz::writer_factory_holder writer_factory_;
++		std::unique_ptr<fz::writer_base> writer_;
++		fz::buffer_lease buffer_;
++
++		// Sizes of unanswered read requests, in request order
++		std::deque<uint32_t> outstanding_;
++
++		// The sftp channel on which this segment stalled delivery
++		fz::ssh::sftp::sftp_client* stall_channel_{};
++
++		bool finalizing_{};
++		bool done_{};
++	};
++
++	friend class segment_connection;
++
++	size_t segment_count() const;
++	int start_segmented(size_t count);
++
++	std::wstring segment_manifest_path() const;
++	std::wstring segment_part_path(size_t i) const;
++	bool read_segment_manifest(uint64_t total);
++	bool write_segment_manifest(uint64_t total);
++	void delete_segment_files(size_t count);
++	void cleanup_segments();
++
++	fz::ssh::sftp::sftp_client* segment_channel(segment_handler & seg);
++	segment_pipe_state & segment_pipe(segment_handler & seg);
++
++	continuation on_segment_open(segment_handler & seg, std::string_view handle);
++	continuation process_segment_data(segment_handler & seg, std::string_view data);
++	continuation process_segment_status(segment_handler & seg, fz::ssh::sftp::status_code code, std::wstring_view msg);
++	void on_segment_buffer_availability(segment_handler & seg, fz::aio_waitable const* w);
++	fz::aio_result get_next_segment_buffer(segment_handler & seg);
++	void finalize_segment(segment_handler & seg);
++	void request_segments(segment_connection* conn);
++	segment_handler* next_request_segment(segment_connection* conn);
++	void migrate_segment(segment_handler & seg, segment_connection & conn);
++
++	void start_next_segment_connection();
++	void on_segment_connection_ready(segment_connection & conn);
++	void on_segment_connection_failed(segment_connection & conn);
++	void on_segment_connection_dropped(segment_connection & conn);
++	void on_segment_hostkey_mismatch();
++
++	void start_concat();
++	void concat_pump();
++	void concat_finalize();
++
+ 	uint64_t request_offset_{};
+ 	uint64_t response_offset_{};
+ 
+@@ -54,6 +136,21 @@ private:
+ 		uint64_t offset_{};
+ 	} rtt_;
+ 
++	std::vector<std::unique_ptr<segment_handler>> segments_;
++	size_t segments_done_{};
++	segment_pipe_state primary_pipe_;
++	bool seg_failed_{};
++
++	std::vector<std::unique_ptr<segment_connection>> segment_connections_;
++	std::string segmented_remote_file_;
++
++	fz::reader_factory_holder concat_reader_factory_;
++	size_t concat_part_{};
++	uint64_t concat_received_{};
++	bool concat_finalizing_{};
++
++	constexpr static size_t max_segment_count_{8};
++
+ 	constexpr static size_t blocksize_{32768};
+ 	constexpr static size_t initial_max_pending_{16};
+ 	size_t max_pending_{initial_max_pending_};
+diff --git a/src/engine/sftp/segment_connection.cpp b/src/engine/sftp/segment_connection.cpp
+new file mode 100644
+index 0000000..a58d8bc
+--- /dev/null
++++ b/src/engine/sftp/segment_connection.cpp
+@@ -0,0 +1,496 @@
++#include "../filezilla.h"
++
++#include "filetransfer.h"
++#include "segment_connection.h"
++
++#include "../activity_logger_layer.h"
++#include "../proxy.h"
++
++#include "../../include/engine_options.h"
++
++#include <libfilezilla/file.hpp>
++#include <libfilezilla/string.hpp>
++
++#include <algorithm>
++
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
++using namespace std::literals;
++
++namespace {
++bool method_available(std::string_view const& methods, std::string_view method)
++{
++	for (auto m : fz::strtokenizer(methods, ","sv, true)) {
++		if (m == method) {
++			return true;
++		}
++	}
++	return false;
++}
++}
++
++segment_connection::segment_connection(CSftpFileTransferOpData & op, CSftpControlSocket & controlSocket)
++	: fz::event_handler(controlSocket, fz::child_event_handler)
++	, op_(op)
++	, controlSocket_(controlSocket)
++{
++}
++
++segment_connection::~segment_connection()
++{
++	teardown();
++	remove_handler();
++}
++
++void segment_connection::teardown()
++{
++	if (connect_timer_) {
++		stop_timer(connect_timer_);
++		connect_timer_ = 0;
++	}
++
++	if (agent_ && agent_pending_) {
++		agent_->cancel(*this);
++		agent_pending_ = false;
++	}
++	agent_.reset();
++
++	// Channels must be destroyed before the client
++	sftp_.reset();
++	ssh_.reset();
++
++	// Destroy in reverse order
++	proxy_layer_.reset();
++	ratelimit_layer_.reset();
++	activity_logger_layer_.reset();
++	socket_.reset();
++}
++
++void segment_connection::start()
++{
++	auto & engine = controlSocket_.GetEngine();
++
++	socket_ = std::make_unique<fz::socket>(engine.GetThreadPool(), nullptr);
++	socket_->set_buffer_sizes(engine.GetOptions().get_int(OPTION_SOCKET_BUFFERSIZE_RECV), -1);
++	activity_logger_layer_ = std::make_unique<activity_logger_layer>(nullptr, *socket_, engine.activity_logger_);
++	ratelimit_layer_ = std::make_unique<fz::rate_limited_layer>(nullptr, *activity_logger_layer_, &engine.GetRateLimiter());
++	active_layer_ = ratelimit_layer_.get();
++
++	int const proxy_type = engine.GetOptions().get_int(OPTION_PROXY_TYPE);
++	if (proxy_type > static_cast<int>(ProxyType::NONE) && proxy_type < static_cast<int>(ProxyType::count) && !controlSocket_.currentServer_.GetBypassProxy()) {
++		proxy_layer_ = CreateProxy(nullptr, *active_layer_, &controlSocket_, static_cast<ProxyType>(proxy_type),
++			fz::to_native(engine.GetOptions().get_string(OPTION_PROXY_HOST)),
++			engine.GetOptions().get_int(OPTION_PROXY_PORT),
++			engine.GetOptions().get_string(OPTION_PROXY_USER),
++			engine.GetOptions().get_string(OPTION_PROXY_PASS));
++		if (proxy_layer_) {
++			active_layer_ = proxy_layer_.get();
++		}
++	}
++
++	active_layer_->set_event_handler(this);
++	int const res = active_layer_->connect(fz::to_native(controlSocket_.ConvertDomainName(controlSocket_.currentServer_.GetHost())), controlSocket_.currentServer_.GetPort());
++	if (res) {
++		controlSocket_.log(logmsg::debug_info, L"Segment connection could not connect: %s", fz::socket_error_description(res));
++		fail();
++		return;
++	}
++
++	// Enable TCP_NODELAY, speeds things up a bit.
++	socket_->set_flags(fz::socket::flag_nodelay | fz::socket::flag_keepalive, true);
++
++	connect_timer_ = add_timer(fz::duration::from_seconds(30), true);
++}
++
++void segment_connection::OnEstablishTimeout(fz::timer_id)
++{
++	connect_timer_ = 0;
++	if (!ready_ && !failed_) {
++		controlSocket_.log(logmsg::status, fztranslate("Establishing an additional connection timed out"));
++		fail();
++	}
++}
++
++void segment_connection::fail()
++{
++	if (failed_) {
++		return;
++	}
++	failed_ = true;
++
++	teardown();
++
++	op_.on_segment_connection_failed(*this);
++}
++
++void segment_connection::operator()(fz::event_base const& ev)
++{
++	fz::dispatch<
++		fz::socket_event,
++		fz::hostaddress_event,
++		fz::ssh::hostkey_verification_event,
++		fz::ssh::auth_requested_event,
++		fz::ssh::auth_done_event,
++		fz::ssh::auth_public_key_okay_event,
++		fz::ssh::auth_signature_failure_event,
++		fz::ssh::auth_keyboard_interactive_prompt_event,
++		fz::ssh::auth_password_change_request_event,
++		fz::ssh::sftp::sftp_client::ready_event,
++		fz::ssh::sftp::sftp_client::done_event,
++		fz::ssh::session_done_event,
++		fz::ssh::available_keys_event,
++		fz::timer_event
++	>(ev, this,
++		&segment_connection::OnSocketEvent,
++		&segment_connection::OnHostAddress,
++		&segment_connection::on_hostkey_verification,
++		&segment_connection::on_auth_requested,
++		&segment_connection::on_auth_done,
++		&segment_connection::on_auth_pubkey_ok,
++		&segment_connection::on_auth_signature_failed,
++		&segment_connection::on_auth_keyboard_interactive_prompt,
++		&segment_connection::on_auth_password_change_requested,
++		&segment_connection::on_sftp_ready,
++		&segment_connection::on_sftp_done,
++		&segment_connection::on_session_done,
++		&segment_connection::on_agent_keys,
++		&segment_connection::OnEstablishTimeout
++	);
++}
++
++void segment_connection::OnSocketEvent(fz::socket_event_source*, fz::socket_event_flag t, int error)
++{
++	controlSocket_.SetAlive();
++
++	switch (t)
++	{
++	case fz::socket_event_flag::connection_next:
++		if (error) {
++			controlSocket_.log(logmsg::status, _("Connection attempt failed with \"%s\", trying next address."), fz::socket_error_description(error));
++		}
++		break;
++	case fz::socket_event_flag::connection:
++		if (error) {
++			controlSocket_.log(logmsg::status, _("Connection attempt failed with \"%s\"."), fz::socket_error_description(error));
++			fail();
++		}
++		else {
++			fz::ssh::client_parameters params;
++			params.kex_ += ",diffie-hellman-group1-sha1,diffie-hellman-group-exchange-sha1"sv;
++			params.cipher_ += ",aes256-cbc,aes192-cbc,aes128-cbc"sv;
++			params.hostkey_signatures_ += ",ssh-rsa"sv;
++			params.single_channel_ = true;
++			params.softwareversion_ = "FileZilla"sv;
++			params.softwareversion_ += ' ';
++			params.softwareversion_ += PACKAGE_VERSION;
++			for (auto & c : params.softwareversion_) {
++				if (c == ' ' || c == '-') {
++					c = '_';
++				}
++			}
++
++			if (controlSocket_.currentServer_.GetExtraParameter("allow_non_crlf_identification_string"sv) == L"1") {
++				params.compatibility_flags_ |= fz::ssh::compatibility_flags::identification_string_not_terminated_by_crlf;
++			}
++
++			std::string user = (controlSocket_.credentials_.logonType_ == LogonType::anonymous) ? "anonymous" : fz::to_utf8(controlSocket_.currentServer_.GetUser());
++			ssh_ = std::make_unique<fz::ssh::client>(params, user, *active_layer_, *this, controlSocket_.logger_);
++		}
++		break;
++	default:
++		break;
++	}
++}
++
++void segment_connection::OnHostAddress(fz::socket_event_source*, std::string const&)
++{
++	controlSocket_.SetAlive();
++}
++
++void segment_connection::on_hostkey_verification(fz::ssh::session*, std::unique_ptr<fz::ssh::public_key> & key, fz::ssh::algorithm_info &)
++{
++	controlSocket_.SetAlive();
++
++	if (key && !controlSocket_.verified_hostkey_.empty() && key->pubkey_blob() == controlSocket_.verified_hostkey_) {
++		ssh_->hostkey_decision(true);
++		return;
++	}
++
++	// The host key differs from the primary connection's verified host key.
++	// This could be a man-in-the-middle attack, abort the transfer.
++	failed_ = true;
++	controlSocket_.log(logmsg::error, fztranslate("The host key of the additional connection does not match the host key of the primary connection"));
++	ssh_->hostkey_decision(false);
++	teardown();
++	op_.on_segment_hostkey_mismatch();
++}
++
++void segment_connection::on_auth_requested(fz::ssh::session*, std::string const& methods, bool is_continuation)
++{
++	controlSocket_.SetAlive();
++	methods_ = methods;
++
++	if (!is_continuation && tried_key_ && !keys_.empty()) {
++		// Try the next key
++		keys_.pop_back();
++		tried_key_ = false;
++	}
++
++	next_auth();
++}
++
++void segment_connection::next_auth()
++{
++	if (method_available(methods_, "publickey"sv) && !tried_key_) {
++		if (auth_with_key()) {
++			return;
++		}
++	}
++
++	if (method_available(methods_, "password"sv) && !tried_pw_ && !controlSocket_.credentials_.GetPass().empty()) {
++		tried_pw_ = true;
++		ssh_->auth_with_password(fz::to_utf8(controlSocket_.credentials_.GetPass()));
++		return;
++	}
++
++	if (controlSocket_.credentials_.logonType_ != LogonType::anonymous && method_available(methods_, "keyboard-interactive"sv) && !tried_interactive_ && !controlSocket_.credentials_.GetPass().empty()) {
++		tried_interactive_ = true;
++		ssh_->auth_keyboard_interactive();
++		return;
++	}
++
++	controlSocket_.log(logmsg::debug_info, L"No authentication methods available for segment connection");
++	fail();
++}
++
++bool segment_connection::load_keys()
++{
++	if (keys_loaded_) {
++		return false;
++	}
++	if (agent_) {
++		// Still loading
++		return true;
++	}
++
++	auto names = controlSocket_.credentials_.keyFile_;
++	names += '\n';
++	names += controlSocket_.GetEngine().GetOptions().get_string(OPTION_SFTP_KEYFILES);
++	std::set<std::wstring> seen_names;
++	for (auto k : fz::strtokenizer(names, L"\r\n"sv, true)) {
++		if (!seen_names.emplace(k).second) {
++			continue;
++		}
++		fz::buffer b;
++		if (!fz::read_file(fz::to_native(k), b, 128*1024)) {
++			controlSocket_.log(logmsg::debug_info, L"Could not read key file '%s'.", k);
++			continue;
++		}
++
++		auto infos = fz::ssh::load_private_key_infos(b.to_view(), controlSocket_.logger_, {});
++		for (auto & i : infos) {
++			// Without the public key the key cannot be probed and, as segment
++			// connections cannot ask for a key password, such keys are unusable.
++			if (!i.pubkey_ || !used_keys_.emplace(i.pubkey_->pubkey_blob()).second) {
++				continue;
++			}
++			i.name_ = fz::to_utf8(k);
++			keys_.emplace_back(std::move(i));
++		}
++	}
++
++	fz::ssh::agent_compatibility_flags flags{};
++#ifdef USE_MAC_SANDBOX
++	flags |= fz::ssh::agent_compatibility_flags::suppress_agent_connection_error;
++#endif
++	if (controlSocket_.currentServer_.GetExtraParameter("allow_agent_keys_of_unknown_type"sv) == L"1") {
++		flags |= fz::ssh::agent_compatibility_flags::allow_keys_with_unknown_types;
++	}
++	agent_ = std::make_unique<fz::ssh::agent_connection>(controlSocket_.GetEngine().GetThreadPool(), *this, controlSocket_.logger_, flags);
++	agent_pending_ = true;
++	agent_->get_keys(*this);
++	return true;
++}
++
++bool segment_connection::auth_with_key()
++{
++	if (load_keys()) {
++		return true;
++	}
++
++	while (!keys_.empty()) {
++		auto & key = keys_.back();
++
++		if (key.pubkey_) {
++			tried_key_ = true;
++			used_keys_.emplace(key.pubkey_->pubkey_blob());
++			ssh_->auth_with_key(key.pubkey_);
++			return true;
++		}
++
++		keys_.pop_back();
++	}
++
++	return false;
++}
++
++void segment_connection::on_agent_keys(fz::ssh::agent_connection* conn, std::vector<std::unique_ptr<fz::ssh::private_key>> & keys)
++{
++	if (!agent_ || conn != agent_.get()) {
++		return;
++	}
++	agent_pending_ = false;
++
++	for (auto & k : keys) {
++		if (!used_keys_.emplace(k->pubkey_blob()).second) {
++			continue;
++		}
++		fz::ssh::private_key_info i;
++		i.privkey_ = std::move(k);
++		i.pubkey_ = i.privkey_->pubkey();
++		keys_.emplace_back(std::move(i));
++	}
++
++	set_keys_loaded();
++	next_auth();
++}
++
++void segment_connection::set_keys_loaded()
++{
++	if (keys_loaded_) {
++		return;
++	}
++
++	keys_loaded_ = true;
++	used_keys_.clear();
++
++	std::reverse(keys_.begin(), keys_.end());
++}
++
++void segment_connection::on_auth_pubkey_ok(fz::ssh::session*)
++{
++	controlSocket_.SetAlive();
++
++	if (keys_.empty()) {
++		fail();
++		return;
++	}
++
++	auto & key = keys_.back();
++	if (!key.privkey_) {
++		// The key is encrypted and segment connections cannot ask for the password
++		keys_.pop_back();
++		tried_key_ = false;
++		next_auth();
++		return;
++	}
++
++	ssh_->auth_with_key(key.privkey_, true);
++}
++
++void segment_connection::on_auth_signature_failed(fz::ssh::session*)
++{
++	if (!keys_.empty()) {
++		keys_.pop_back();
++	}
++	tried_key_ = false;
++	next_auth();
++}
++
++bool segment_connection::interactive_prompt_asks_for_password(std::string_view prompt)
++{
++	fz::rtrim(prompt, "\r\n :"sv);
++	if (fz::equal_insensitive_ascii(prompt, "password"sv)) {
++		return true;
++	}
++
++	if (fz::equal_insensitive_ascii(prompt, fz::sprintf("password for %s:%s"sv, fz::to_utf8(controlSocket_.currentServer_.GetUser()), fz::to_utf8(controlSocket_.currentServer_.GetHost())))) {
++		return true;
++	}
++
++	return false;
++}
++
++void segment_connection::on_auth_keyboard_interactive_prompt(fz::ssh::session*, std::string const&, std::string const&, std::vector<fz::ssh::keyboard_interactive_prompt> & prompts)
++{
++	controlSocket_.SetAlive();
++
++	if (tried_interactive_ && prompts.size() == 1 && !controlSocket_.credentials_.GetPass().empty() && interactive_prompt_asks_for_password(prompts[0].prompt_)) {
++		std::vector<std::string> responses;
++		responses.emplace_back(fz::to_utf8(controlSocket_.credentials_.GetPass()));
++		ssh_->auth_keyboard_interactive_response(std::move(responses));
++		return;
++	}
++
++	// Segment connections cannot ask the user, fail just this connection
++	controlSocket_.log(logmsg::debug_info, L"Cannot answer keyboard-interactive prompt for segment connection");
++	fail();
++}
++
++void segment_connection::on_auth_password_change_requested(fz::ssh::session*)
++{
++	controlSocket_.log(logmsg::debug_info, L"Server requested password change on segment connection");
++	fail();
++}
++
++void segment_connection::on_auth_done(fz::ssh::session*)
++{
++	controlSocket_.SetAlive();
++
++	auto si = ssh_->open_channel(fz::ssh::channel_type::subsystem, "sftp"sv);
++	if (!si) {
++		controlSocket_.log(logmsg::debug_info, L"Could not open SFTP channel on segment connection");
++		fail();
++		return;
++	}
++
++	fz::ssh::sftp::compatibility_flags flags{};
++	if (controlSocket_.currentServer_.GetExtraParameter("ignore_unknown_flags_in_attributes"sv) == L"1") {
++		flags |= fz::ssh::sftp::compatibility_flags::ignore_unknown_flags_in_attributes;
++	}
++
++	sftp_ = std::make_unique<fz::ssh::sftp::sftp_client>(std::move(si), *this, controlSocket_.logger_, flags);
++}
++
++void segment_connection::on_sftp_ready(fz::ssh::sftp::sftp_client*)
++{
++	controlSocket_.SetAlive();
++
++	if (connect_timer_) {
++		stop_timer(connect_timer_);
++		connect_timer_ = 0;
++	}
++
++	ready_ = true;
++	op_.on_segment_connection_ready(*this);
++}
++
++void segment_connection::on_sftp_done(fz::ssh::sftp::sftp_client*)
++{
++	if (failed_) {
++		return;
++	}
++	if (ready_) {
++		failed_ = true;
++		op_.on_segment_connection_dropped(*this);
++	}
++	else {
++		fail();
++	}
++}
++
++void segment_connection::on_session_done(fz::ssh::session*)
++{
++	if (failed_) {
++		return;
++	}
++	if (ready_) {
++		failed_ = true;
++		op_.on_segment_connection_dropped(*this);
++	}
++	else {
++		fail();
++	}
++}
+diff --git a/src/engine/sftp/segment_connection.h b/src/engine/sftp/segment_connection.h
+new file mode 100644
+index 0000000..6ac30bf
+--- /dev/null
++++ b/src/engine/sftp/segment_connection.h
+@@ -0,0 +1,99 @@
++#ifndef FILEZILLA_ENGINE_SFTP_SEGMENT_CONNECTION_HEADER
++#define FILEZILLA_ENGINE_SFTP_SEGMENT_CONNECTION_HEADER
++
++#include "sftpcontrolsocket.h"
++
++#include <fzssh/agent.hpp>
++#include <fzssh/client.hpp>
++#include <fzssh/privkey.hpp>
++
++#include <libfilezilla/rate_limited_layer.hpp>
++#include <libfilezilla/socket.hpp>
++
++#include <set>
++
++class activity_logger_layer;
++class ProxyBase;
++class CSftpFileTransferOpData;
++
++// Per-channel adaptive pipelining state, modeled on the single-stream logic
++struct segment_pipe_state
++{
++	fz::monotonic_clock rtt_requested_;
++	uint64_t rtt_offset_{};
++	uint64_t requested_offset_{};
++	uint64_t response_offset_{};
++	size_t max_pending_{16};
++	size_t next_segment_{};
++};
++
++// An additional SSH connection used to download file segments in parallel.
++// Never prompts the user: authentication reuses the credentials of the
++// primary connection and the host key must be identical to the primary's.
++class segment_connection final : public fz::event_handler
++{
++public:
++	segment_connection(CSftpFileTransferOpData & op, CSftpControlSocket & controlSocket);
++	~segment_connection();
++
++	void start();
++
++	bool ready() const { return ready_; }
++
++	CSftpFileTransferOpData & op_;
++	CSftpControlSocket & controlSocket_;
++
++	std::unique_ptr<fz::socket> socket_;
++	std::unique_ptr<activity_logger_layer> activity_logger_layer_;
++	std::unique_ptr<fz::rate_limited_layer> ratelimit_layer_;
++	std::unique_ptr<ProxyBase> proxy_layer_;
++	fz::socket_interface* active_layer_{};
++
++	std::unique_ptr<fz::ssh::client> ssh_;
++	std::unique_ptr<fz::ssh::sftp::sftp_client> sftp_;
++
++	segment_pipe_state pipe_;
++
++private:
++	virtual void operator()(fz::event_base const& ev) override;
++
++	void OnSocketEvent(fz::socket_event_source*, fz::socket_event_flag t, int error);
++	void OnHostAddress(fz::socket_event_source*, std::string const& address);
++
++	void on_hostkey_verification(fz::ssh::session*, std::unique_ptr<fz::ssh::public_key> & key, fz::ssh::algorithm_info &);
++	void on_auth_requested(fz::ssh::session*, std::string const& methods, bool is_continuation);
++	void on_auth_done(fz::ssh::session*);
++	void on_auth_pubkey_ok(fz::ssh::session*);
++	void on_auth_signature_failed(fz::ssh::session*);
++	void on_auth_keyboard_interactive_prompt(fz::ssh::session*, std::string const& name, std::string const& instruction, std::vector<fz::ssh::keyboard_interactive_prompt> & prompts);
++	void on_auth_password_change_requested(fz::ssh::session*);
++	void on_sftp_ready(fz::ssh::sftp::sftp_client*);
++	void on_sftp_done(fz::ssh::sftp::sftp_client*);
++	void on_session_done(fz::ssh::session*);
++	void on_agent_keys(fz::ssh::agent_connection* conn, std::vector<std::unique_ptr<fz::ssh::private_key>> & keys);
++
++	void next_auth();
++	bool load_keys();
++	bool auth_with_key();
++	void set_keys_loaded();
++	bool interactive_prompt_asks_for_password(std::string_view prompt);
++	void teardown();
++	void fail();
++	void OnEstablishTimeout(fz::timer_id);
++
++	std::vector<fz::ssh::private_key_info> keys_;
++	std::unique_ptr<fz::ssh::agent_connection> agent_;
++	std::set<std::string> used_keys_;
++
++	fz::timer_id connect_timer_{};
++	std::string methods_;
++	bool agent_pending_{};
++	bool keys_loaded_{};
++	bool tried_pw_{};
++	bool tried_interactive_{};
++	bool tried_key_{};
++	bool failed_{};
++	bool ready_{};
++};
++
++#endif
+diff --git a/src/engine/sftp/sftpcontrolsocket.cpp b/src/engine/sftp/sftpcontrolsocket.cpp
+index 75b13c2..8a08a4e 100644
+--- a/src/engine/sftp/sftpcontrolsocket.cpp
++++ b/src/engine/sftp/sftpcontrolsocket.cpp
+@@ -247,6 +247,7 @@ void CSftpControlSocket::Push(std::unique_ptr<COpData> && pNewOpData)
+ 
+ void CSftpControlSocket::on_hostkey_verification(fz::ssh::session*, std::unique_ptr<fz::ssh::public_key> & key, fz::ssh::algorithm_info & algs)
+ {
++	verified_hostkey_ = key->pubkey_blob();
+ 	engine_.AddNotification(std::make_unique<CSftpEncryptionNotification>(algs, key->fingerprint(fz::hash_algorithm::sha256, true)));
+ 	SendAsyncRequest(std::make_unique<CHostKeyNotification>(currentServer_, handle_, std::move(key), std::move(algs)), async_request_type::global);
+ }
+diff --git a/src/engine/sftp/sftpcontrolsocket.h b/src/engine/sftp/sftpcontrolsocket.h
+index 5ecb3c1..3ed67ae 100644
+--- a/src/engine/sftp/sftpcontrolsocket.h
++++ b/src/engine/sftp/sftpcontrolsocket.h
+@@ -47,6 +47,10 @@ protected:
+ 	std::unique_ptr<fz::ssh::client> ssh_;
+ 	std::unique_ptr<fz::ssh::sftp::sftp_client> sftp_;
+ 
++	// The primary connection's host key as verified by the user, used to
++	// validate additional segment connections without further prompts
++	std::string verified_hostkey_;
++
+ 	friend class CSftpOpData;
+ 	friend class CProtocolOpData<CSftpControlSocket>;
+ 	friend class CSftpChmodOpData;
+@@ -57,6 +61,7 @@ protected:
+ 	friend class CSftpMkdirOpData;
+ 	friend class CSftpRenameOpData;
+ 	friend class CSftpRemoveDirOpData;
++	friend class segment_connection;
+ };
+ 
+ class CSftpOpData : public CProtocolOpData<CSftpControlSocket>, public fz::ssh::sftp::response_handler, public fz::event_handler
+diff --git a/src/include/engine_options.h b/src/include/engine_options.h
+index b6faccd..072b837 100644
+--- a/src/include/engine_options.h
++++ b/src/include/engine_options.h
+@@ -81,6 +81,10 @@ enum engineOptions : unsigned int
+ 
+ 	OPTION_DIRECTORY_LISTING_ITEM_LIMIT,
+ 
++	OPTION_SFTP_DOWNLOAD_SEGMENTS,	// Number of segments a single SFTP download is
++	                                // split into. 1 disables segmented downloads.
++	OPTION_SFTP_SEGMENT_MIN_SIZE,	// Minimum size in MiB per segment
++
+ 	OPTIONS_ENGINE_NUM
+ };
+ 
+diff --git a/src/interface/settings/optionspage_transfer.cpp b/src/interface/settings/optionspage_transfer.cpp
+index 667ee8a..98dfb4a 100644
+--- a/src/interface/settings/optionspage_transfer.cpp
++++ b/src/interface/settings/optionspage_transfer.cpp
+@@ -15,6 +15,9 @@ struct COptionsPageTransfer::impl final
+ 	wxSpinCtrlEx* downloads_{};
+ 	wxSpinCtrlEx* uploads_{};
+ 
++	wxSpinCtrlEx* sftp_segments_{};
++	wxSpinCtrlEx* sftp_segment_min_size_{};
++
+ 	wxChoice* burst_tolerance_{};
+ 
+ 	wxCheckBox* limit_{};
+@@ -66,6 +69,22 @@ bool COptionsPageTransfer::CreateControls(wxWindow* parent)
+ 		inner->Add(new wxStaticText(box, nullID, _("(0 for no limit)")), lay.valign);
+ 	}
+ 
++	{
++		auto [box, inner] = lay.createStatBox(main, _("Segmented SFTP downloads"), 3);
++		inner->Add(new wxStaticText(box, nullID, _("SFTP download &segments:")), lay.valign);
++		impl_->sftp_segments_ = new wxSpinCtrlEx(box, nullID, wxString(), wxDefaultPosition, wxSize(lay.dlgUnits(26), -1));
++		impl_->sftp_segments_->SetRange(1, 8);
++		impl_->sftp_segments_->SetMaxLength(1);
++		inner->Add(impl_->sftp_segments_, lay.valign);
++		inner->Add(new wxStaticText(box, nullID, _("(1 disables segmented downloads)")), lay.valign);
++		inner->Add(new wxStaticText(box, nullID, _("Minimum &size per segment:")), lay.valign);
++		impl_->sftp_segment_min_size_ = new wxSpinCtrlEx(box, nullID, wxString(), wxDefaultPosition, wxSize(lay.dlgUnits(26), -1));
++		impl_->sftp_segment_min_size_->SetRange(1, 1048576);
++		impl_->sftp_segment_min_size_->SetMaxLength(7);
++		inner->Add(impl_->sftp_segment_min_size_, lay.valign);
++		inner->Add(new wxStaticText(box, nullID, _("(in MiB)")), lay.valign);
++	}
++
+ 	{
+ 		auto [box, inner] = lay.createStatBox(main, _("Speed limits"), 1);
+ 
+@@ -150,6 +169,9 @@ bool COptionsPageTransfer::LoadPage()
+ 	impl_->downloads_->SetValue(m_pOptions->get_int(OPTION_CONCURRENTDOWNLOADLIMIT));
+ 	impl_->uploads_->SetValue(m_pOptions->get_int(OPTION_CONCURRENTUPLOADLIMIT));
+ 
++	impl_->sftp_segments_->SetValue(m_pOptions->get_int(OPTION_SFTP_DOWNLOAD_SEGMENTS));
++	impl_->sftp_segment_min_size_->SetValue(m_pOptions->get_int(OPTION_SFTP_SEGMENT_MIN_SIZE));
++
+ 	impl_->burst_tolerance_->SetSelection(m_pOptions->get_int(OPTION_SPEEDLIMIT_BURSTTOLERANCE));
+ 	impl_->burst_tolerance_->Enable(enable_speedlimits);
+ 
+@@ -168,6 +190,9 @@ bool COptionsPageTransfer::SavePage()
+ 	m_pOptions->set(OPTION_CONCURRENTDOWNLOADLIMIT,	impl_->downloads_->GetValue());
+ 	m_pOptions->set(OPTION_CONCURRENTUPLOADLIMIT, impl_->uploads_->GetValue());
+ 
++	m_pOptions->set(OPTION_SFTP_DOWNLOAD_SEGMENTS, impl_->sftp_segments_->GetValue());
++	m_pOptions->set(OPTION_SFTP_SEGMENT_MIN_SIZE, impl_->sftp_segment_min_size_->GetValue());
++
+ 	m_pOptions->set(OPTION_SPEEDLIMIT_INBOUND, impl_->dllimit_->GetValue().ToStdWstring());
+ 	m_pOptions->set(OPTION_SPEEDLIMIT_OUTBOUND, impl_->ullimit_->GetValue().ToStdWstring());
+ 	m_pOptions->set(OPTION_SPEEDLIMIT_BURSTTOLERANCE, impl_->burst_tolerance_->GetSelection());
+@@ -191,6 +216,14 @@ bool COptionsPageTransfer::Validate()
+ 		return DisplayError(impl_->uploads_, _("Please enter a number between 0 and 999 for the number of concurrent uploads."));
+ 	}
+ 
++	if (impl_->sftp_segments_->GetValue() < 1 || impl_->sftp_segments_->GetValue() > 8) {
++		return DisplayError(impl_->sftp_segments_, _("Please enter a number between 1 and 8 for the number of SFTP download segments."));
++	}
++
++	if (impl_->sftp_segment_min_size_->GetValue() < 1 || impl_->sftp_segment_min_size_->GetValue() > 1048576) {
++		return DisplayError(impl_->sftp_segment_min_size_, _("Please enter a number between 1 and 1048576 for the minimum size per segment."));
++	}
++
+ 	if (fz::to_integral<int>(impl_->dllimit_->GetValue().ToStdWstring(), -1) < 0) {
+ 		const wxString unit = SizeFormatter(*m_pOptions).GetUnitSymbol(UnitPrefix::kilo, 1024);
+ 		return DisplayError(impl_->dllimit_, wxString::Format(_("Please enter a download speed limit greater or equal to 0 %s/s."), unit));
