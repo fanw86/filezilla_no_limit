@@ -95,6 +95,8 @@ public:
 	static wxIconBundle GetIconBundle(const wxArtID& id, const wxArtClient& client = wxART_OTHER);
 
 	static wxSize GetIconSize(COptionsBase& options, IconSize size, bool userScaled = false);
+	// Uses the CThemeProvider singleton's options
+	static wxSize GetIconSize(IconSize size, bool userScaled = false);
 
 	// Note: Always 1 on OS X
 	static double GetUIScaleFactor(COptionsBase & options);

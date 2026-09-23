@@ -598,6 +598,15 @@ wxSize CThemeProvider::GetIconSize(COptionsBase & options, IconSize size, bool u
 	return ret;
 }
 
+wxSize CThemeProvider::GetIconSize(IconSize size, bool userScaled)
+{
+	auto* t = Get();
+	if (!t) {
+		return GetIconSize(*static_cast<COptionsBase*>(nullptr), size, userScaled);
+	}
+	return GetIconSize(t->options_, size, userScaled);
+}
+
 double CThemeProvider::GetUIScaleFactor(COptionsBase & options)
 {
 	int x = GetIconSize(options, IconSize::small).x;
