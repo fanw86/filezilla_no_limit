@@ -602,7 +602,8 @@ wxSize CThemeProvider::GetIconSize(IconSize size, bool userScaled)
 {
 	auto* t = Get();
 	if (!t) {
-		return GetIconSize(*static_cast<COptionsBase*>(nullptr), size, userScaled);
+		// No singleton yet: skip user scaling (it needs options_)
+		return GetIconSize(*static_cast<COptionsBase*>(nullptr), size, false);
 	}
 	return GetIconSize(t->options_, size, userScaled);
 }

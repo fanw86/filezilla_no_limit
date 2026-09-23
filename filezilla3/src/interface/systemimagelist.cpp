@@ -57,7 +57,7 @@ bool CSystemImageList::CreateSystemImageList(int size)
 
 	UINT sizeFlag = SHGFI_SMALLICON;
 	if (size != CThemeProvider::GetIconSize(IconSize::small).x) {
-		size = (size != CThemeProvider::GetIconSize(IconSize::Normal).x);
+		size = (size != CThemeProvider::GetIconSize(IconSize::normal).x);
 		sizeFlag = SHGFI_ICON;
 	}
 
