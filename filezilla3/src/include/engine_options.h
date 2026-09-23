@@ -81,6 +81,10 @@ enum engineOptions : unsigned int
 
 	OPTION_DIRECTORY_LISTING_ITEM_LIMIT,
 
+	OPTION_SFTP_DOWNLOAD_SEGMENTS,	// Number of segments a single SFTP download is
+	                                // split into. 1 disables segmented downloads.
+	OPTION_SFTP_SEGMENT_MIN_SIZE,	// Minimum size in MiB per segment
+
 	OPTIONS_ENGINE_NUM
 };
 

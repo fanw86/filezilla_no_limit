@@ -247,6 +247,7 @@ void CSftpControlSocket::Push(std::unique_ptr<COpData> && pNewOpData)
 
 void CSftpControlSocket::on_hostkey_verification(fz::ssh::session*, std::unique_ptr<fz::ssh::public_key> & key, fz::ssh::algorithm_info & algs)
 {
+	verified_hostkey_ = key->pubkey_blob();
 	engine_.AddNotification(std::make_unique<CSftpEncryptionNotification>(algs, key->fingerprint(fz::hash_algorithm::sha256, true)));
 	SendAsyncRequest(std::make_unique<CHostKeyNotification>(currentServer_, handle_, std::move(key), std::move(algs)), async_request_type::global);
 }

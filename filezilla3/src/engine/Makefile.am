@@ -104,6 +104,7 @@ libfzclient_private_la_SOURCES += \
 		sftp/mkd.cpp \
 		sftp/rename.cpp \
 		sftp/rmd.cpp \
+		sftp/segment_connection.cpp \
 		sftp/sftpcontrolsocket.cpp
 
 noinst_HEADERS += \
@@ -115,6 +116,7 @@ noinst_HEADERS += \
 		sftp/mkd.h \
 		sftp/rename.h \
 		sftp/rmd.h \
+		sftp/segment_connection.h \
 		sftp/sftpcontrolsocket.h
 endif
 
