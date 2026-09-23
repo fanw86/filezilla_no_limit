@@ -1,0 +1,18 @@
+diff --git a/locales/Makefile.am b/locales/Makefile.am
+index a656a93..f1980c7 100644
+--- a/locales/Makefile.am
++++ b/locales/Makefile.am
+@@ -65,8 +65,11 @@ filezilla.pot: $(srcdir)/../src/include/*.h $(srcdir)/../src/engine/*.h $(srcdir
+ 	@rm -f $@.new
+ 	@touch $@.new
+ 
+-	FILES="`find $(srcdir)/../src -name '*.h' -o -name '*.cpp'`"; \
+-	$(XGETTEXT) $(XGETTEXT_ARGS) -o $@.new $$FILES || exit 1
++# Pass the file list through xargs in small batches: a single xgettext
++# invocation with ~750 absolute paths exceeds the 32k command-line limit
++# of native Windows processes under MSYS2 ("Argument list too long").
++	find $(srcdir)/../src -name '*.h' -o -name '*.cpp' | \
++		xargs -s 20000 $(XGETTEXT) $(XGETTEXT_ARGS) -o $@.new || exit 1
+ 
+ # change charset declaration in template file to UTF-8
+ 	cat $@.new | sed -e "s/^\"Content-Type: .*$$/\"Content-Type: text\\/plain; charset=UTF-8\\\\n\"/" > $@.new~
