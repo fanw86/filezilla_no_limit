@@ -1,0 +1,40 @@
+# CI build scripts for FileZilla (with high-concurrency patch)
+
+Produces:
+
+- **Windows x64**: `FileZilla_<ver>_win64-setup.exe` (NSIS installer)
+- **Linux x86_64**: `FileZilla_<ver>_linux-x86_64.tar.xz`
+
+## Layout
+
+```
+filezilla3/                                 # FileZilla source (patched)
+filezilla3-unlimit-transfer-concurrency.patch
+.github/workflows/build.yml
+scripts/ci/fetch-deps.sh                    # builds libfilezilla + fzssh
+scripts/ci/build-windows.sh                 # FileZilla + makensis
+scripts/ci/build-linux.sh                   # FileZilla + tarball
+```
+
+## Local Windows build (MSYS2 MinGW64)
+
+```bash
+pacman -S --needed base-devel curl tar xz zip autoconf automake libtool make \
+  gettext-devel pkgconf meson ninja nsis \
+  mingw-w64-x86_64-toolchain mingw-w64-x86_64-wxwidgets3.2-msw \
+  mingw-w64-x86_64-nettle mingw-w64-x86_64-gnutls \
+  mingw-w64-x86_64-sqlite3 mingw-w64-x86_64-zlib mingw-w64-x86_64-gettext \
+  mingw-w64-i686-toolchain
+
+export PREFIX="$HOME/prefix"
+bash scripts/ci/fetch-deps.sh
+bash scripts/ci/build-windows.sh
+# → dist/FileZilla_*_win64-setup.exe
+```
+
+Set `WITH_SHELLEXT=0` to skip the 32-bit shell extension (faster).
+
+## Notes
+
+- Dependency versions are pinned in the workflow env (`LIBFILEZILLA_VERSION`, `FZSSH_VERSION`).
+- Transfer concurrency limit is raised 10 → 999 (see the patch file).

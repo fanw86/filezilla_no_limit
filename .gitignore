@@ -1,0 +1,14 @@
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Nested VCS metadata (source is tracked in this repo)
+.svn/
+
+# CI outputs
+.ci-deps/
+dist/
+filezilla3/compile/
+**/win32zip/
