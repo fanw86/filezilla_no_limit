@@ -123,7 +123,7 @@ bool CSftpControlSocket::SetAsyncRequestReply(CAsyncRequestNotification *pNotifi
 				return false;
 			}
 
-			static_cast<CSftpConnectOpData&>(*operations_.back()).set_interactive_responses(*req.responses_);
+			ssh_->auth_keyboard_interactive_response(*req.responses_);
 		}
 		break;
 	case reqId_password:
@@ -158,7 +158,7 @@ bool CSftpControlSocket::SetAsyncRequestReply(CAsyncRequestNotification *pNotifi
 
 			std::vector<std::string> responses;
 			responses.emplace_back(req.otp_);
-			static_cast<CSftpConnectOpData&>(*operations_.back()).set_interactive_responses(responses);
+			ssh_->auth_keyboard_interactive_response(responses);
 		}
 		break;
 	case reqId_keyfile_password:

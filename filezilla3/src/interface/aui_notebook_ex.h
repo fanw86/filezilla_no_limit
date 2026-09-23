@@ -5,12 +5,11 @@
 
 #include <map>
 
-class COptionsBase;
 class wxAuiTabArtEx;
 class wxAuiNotebookEx : public wxAuiNotebook
 {
 public:
-	wxAuiNotebookEx(COptionsBase& options);
+	wxAuiNotebookEx() = default;
 
 	void RemoveExtraBorders();
 
@@ -32,8 +31,6 @@ public:
 	wxColour GetTabColour(wxWindow* page);
 
 protected:
-	COptionsBase & options_;
-
 	std::vector<bool> m_highlighted;
 
 	std::map<wxWindow*, wxColour> m_colourMap;

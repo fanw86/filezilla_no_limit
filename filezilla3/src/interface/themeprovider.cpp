@@ -322,11 +322,6 @@ CThemeProvider* CThemeProvider::Get()
 	return instance;
 }
 
-wxBitmap CThemeProvider::CreateBitmap(wxArtID const& id, wxArtClient const& client, IconSize const& size, bool allowDummy)
-{
-	return CreateBitmap(id, client, GetIconSize(options_, size), allowDummy);
-}
-
 wxBitmap CThemeProvider::CreateBitmap(wxArtID const& id, wxArtClient const& client, wxSize const& size, bool allowDummy)
 {
 	wxASSERT(size.GetWidth() == size.GetHeight());
@@ -335,7 +330,7 @@ wxBitmap CThemeProvider::CreateBitmap(wxArtID const& id, wxArtClient const& clie
 	if (size.x <= 0 || size.y <= 0) {
 		newSize = GetNativeSizeHint(client);
 		if (newSize.x <= 0 || newSize.y <= 0) {
-			newSize = GetIconSize(options_, IconSize::small);
+			newSize = GetIconSize(iconSizeSmall);
 		}
 	}
 	else {
@@ -523,22 +518,22 @@ void CThemeProvider::OnOptionsChanged(watched_options const&)
 	wxArtProvider::Push(this);
 }
 
-wxSize CThemeProvider::GetIconSize(COptionsBase & options, IconSize size, bool userScaled)
+wxSize CThemeProvider::GetIconSize(iconSize size, bool userScaled)
 {
 	int s;
-	if (size == IconSize::tiny) {
+	if (size == iconSizeTiny) {
 		s = wxSystemSettings::GetMetric(wxSYS_SMALLICON_X) * 3 / 4;
 		if (s <= 0) {
 			s = 12;
 		}
 	}
-	else if (size == IconSize::small) {
+	else if (size == iconSizeSmall) {
 		s = wxSystemSettings::GetMetric(wxSYS_SMALLICON_X);
 		if (s <= 0) {
 			s = 16;
 		}
 	}
-	else if (size == IconSize::subnormal) {
+	else if (size == iconSize24) {
 		s = wxSystemSettings::GetMetric(wxSYS_SMALLICON_X);
 		if (s <= 0) {
 			s = 24;
@@ -547,7 +542,7 @@ wxSize CThemeProvider::GetIconSize(COptionsBase & options, IconSize size, bool u
 			s += s / 2;
 		}
 	}
-	else if (size == IconSize::large) {
+	else if (size == iconSizeLarge) {
 		s = wxSystemSettings::GetMetric(wxSYS_ICON_X);
 		if (s <= 0) {
 			s = 48;
@@ -556,7 +551,7 @@ wxSize CThemeProvider::GetIconSize(COptionsBase & options, IconSize size, bool u
 			s += s / 2;
 		}
 	}
-	else if (size == IconSize::huge) {
+	else if (size == iconSizeHuge) {
 		s = wxSystemSettings::GetMetric(wxSYS_ICON_X);
 		if (s <= 0) {
 			s = 64;
@@ -588,7 +583,7 @@ wxSize CThemeProvider::GetIconSize(COptionsBase & options, IconSize size, bool u
 #endif
 
 	if (userScaled) {
-		float scale = static_cast<float>(options.get_int(OPTION_ICONS_SCALE));
+		float scale = static_cast<float>(COptions::Get()->get_int(OPTION_ICONS_SCALE));
 		ret = ret.Scale(scale / 100.f, scale / 100.f);
 		if (!ret.x) {
 			ret = wxSize(1, 1);
@@ -598,19 +593,9 @@ wxSize CThemeProvider::GetIconSize(COptionsBase & options, IconSize size, bool u
 	return ret;
 }
 
-wxSize CThemeProvider::GetIconSize(IconSize size, bool userScaled)
+double CThemeProvider::GetUIScaleFactor()
 {
-	auto* t = Get();
-	if (!t) {
-		// No singleton yet: skip user scaling (it needs options_)
-		return GetIconSize(*static_cast<COptionsBase*>(nullptr), size, false);
-	}
-	return GetIconSize(t->options_, size, userScaled);
-}
-
-double CThemeProvider::GetUIScaleFactor(COptionsBase & options)
-{
-	int x = GetIconSize(options, IconSize::small).x;
+	int x = GetIconSize(iconSizeSmall).x;
 	if (!x) {
 		return 1.;
 	}
@@ -619,18 +604,9 @@ double CThemeProvider::GetUIScaleFactor(COptionsBase & options)
 	}
 }
 
-double CThemeProvider::GetUIScaleFactor()
+wxStaticBitmap* CThemeProvider::createStaticBitmap(wxWindow* parent, std::wstring const& name, iconSize s)
 {
-	auto* t = Get();
-	if (!t) {
-		return 1.;
-	}
-	return GetUIScaleFactor(t->options_);
-}
-
-wxStaticBitmap* CThemeProvider::createStaticBitmap(wxWindow* parent, std::wstring const& name, IconSize s)
-{
-	auto const size = CThemeProvider::GetIconSize(options_, s);
+	auto const size = CThemeProvider::GetIconSize(s);
 	return new wxStaticBitmap(parent, -1, MakeBmpBundle(CreateBitmap(name, wxString(), size)), wxDefaultPosition, size);
 }
 

@@ -183,14 +183,14 @@ void CContextControl::CreateContextControls(CState& state)
 
 		splitterPositions = currentControls.GetSplitterPositions();
 		if (currentControls.pLocalListView) {
-			currentControls.pLocalListView->SaveColumnSettings(OPTION_LOCALFILELIST_COLUMN_WIDTHS, OPTION_LOCALFILELIST_COLUMN_SHOWN, OPTION_LOCALFILELIST_COLUMN_ORDER);
+			currentControls.pLocalListView->SaveColumnSettings(m_mainFrame.GetOptions(), OPTION_LOCALFILELIST_COLUMN_WIDTHS, OPTION_LOCALFILELIST_COLUMN_SHOWN, OPTION_LOCALFILELIST_COLUMN_ORDER);
 		}
 		if (currentControls.pRemoteListView) {
-			currentControls.pRemoteListView->SaveColumnSettings(OPTION_REMOTEFILELIST_COLUMN_WIDTHS, OPTION_REMOTEFILELIST_COLUMN_SHOWN, OPTION_REMOTEFILELIST_COLUMN_ORDER);
+			currentControls.pRemoteListView->SaveColumnSettings(m_mainFrame.GetOptions(), OPTION_REMOTEFILELIST_COLUMN_WIDTHS, OPTION_REMOTEFILELIST_COLUMN_SHOWN, OPTION_REMOTEFILELIST_COLUMN_ORDER);
 		}
 
 		if (!m_tabs) {
-			m_tabs = new wxAuiNotebookEx(state.GetOptions());
+			m_tabs = new wxAuiNotebookEx();
 
 			m_tabs->Create(this, wxID_ANY, initial_position, paneSizes[0], wxNO_BORDER | wxAUI_NB_SCROLL_BUTTONS | wxAUI_NB_WINDOWLIST_BUTTON | wxAUI_NB_CLOSE_ON_ALL_TABS | wxAUI_NB_TAB_MOVE);
 			m_tabs->SetExArtProvider();

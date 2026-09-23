@@ -1435,7 +1435,7 @@ bool CQueueView::Quit(bool force)
 		m_quit = 2;
 	}
 
-	SaveColumnSettings(OPTION_QUEUE_COLUMN_WIDTHS, OPTIONS_NUM, OPTIONS_NUM);
+	SaveColumnSettings(options_, OPTION_QUEUE_COLUMN_WIDTHS, OPTIONS_NUM, OPTIONS_NUM);
 
 	m_resize_timer.Stop();
 
@@ -3097,7 +3097,7 @@ void CQueueView::OnStateChange(CState*, t_statechange_notifications notification
 	else if (notification == STATECHANGE_QUITNOW) {
 		if (m_quit != 2) {
 			SaveQueue(false);
-			SaveColumnSettings(OPTION_QUEUE_COLUMN_WIDTHS, OPTIONS_NUM, OPTIONS_NUM);
+			SaveColumnSettings(options_, OPTION_QUEUE_COLUMN_WIDTHS, OPTIONS_NUM, OPTIONS_NUM);
 		}
 	}
 }

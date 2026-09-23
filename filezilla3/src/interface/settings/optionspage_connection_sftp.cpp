@@ -21,7 +21,6 @@ struct COptionsPageConnectionSFTP::impl
 	wxButton* add_{};
 	wxButton* remove_{};
 
-	wxCheckBox* agent_{};
 	wxCheckBox* compression_{};
 };
 
@@ -64,13 +63,10 @@ bool COptionsPageConnectionSFTP::CreateControls(wxWindow* parent)
 		impl_->remove_->Bind(wxEVT_BUTTON, &COptionsPageConnectionSFTP::OnRemove, this);
 		row->Add(impl_->remove_, lay.valign);
 
-		impl_->agent_ = new wxCheckBox(box, nullID, _("&Use SSH agent"));
-		inner->Add(impl_->agent_);
-
 #ifdef __WXMSW__
-		inner->Add(new wxStaticText(box, nullID, _("FileZilla recognizes both OpenSSH's AuthenticationAgent and PuTTY's Pageant.")), lay.indent);
+		inner->Add(new wxStaticText(box, nullID, _("Alternatively you can use the Pageant tool from PuTTY to manage your keys, FileZilla does recognize Pageant.")));
 #else
-		inner->Add(new wxStaticText(box, nullID, _("Make sure the SSH_AUTH_SOCK environment variable is set.")), 0, wxLEFT, lay.indent);
+		inner->Add(new wxStaticText(box, nullID, _("Alternatively you can use your system's SSH agent. To do so, make sure the SSH_AUTH_SOCK environment variable is set.")));
 #endif
 	}
 #if 0
@@ -106,10 +102,6 @@ bool COptionsPageConnectionSFTP::LoadPage()
 
 	SetCtrlState();
 
-	if (impl_->agent_) {
-		impl_->agent_->SetValue(m_pOptions->get_int(OPTION_SFTP_USE_AGENT) != 0);
-	}
-
 	if (impl_->compression_) {
 		impl_->compression_->SetValue(m_pOptions->get_int(OPTION_SFTP_COMPRESSION) != 0);
 	}
@@ -128,10 +120,6 @@ bool COptionsPageConnectionSFTP::SavePage()
 		keyFiles += impl_->keys_->GetItemText(i).ToStdWstring();
 	}
 	m_pOptions->set(OPTION_SFTP_KEYFILES, keyFiles);
-
-	if (impl_->agent_) {
-		m_pOptions->set(OPTION_SFTP_USE_AGENT, impl_->agent_->GetValue() ? 1 : 0);
-	}
 
 	if (impl_->compression_) {
 		m_pOptions->set(OPTION_SFTP_COMPRESSION, impl_->compression_->GetValue() ? 1 : 0);

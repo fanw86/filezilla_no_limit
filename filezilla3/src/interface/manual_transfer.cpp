@@ -265,7 +265,7 @@ void CManualTransfer::SetAutoAsciiState()
 		impl_->type_label_->Hide();
 	}
 	else {
-		if (impl_->download_->GetValue() ? CAutoAsciiFiles::TransferRemoteAsAscii(options_, file, s.server.GetType()) : CAutoAsciiFiles::TransferLocalAsAscii(options_, file, s.server.GetType())) {
+		if (impl_->download_->GetValue() ? CAutoAsciiFiles::TransferRemoteAsAscii(*COptions::Get(), file, s.server.GetType()) : CAutoAsciiFiles::TransferLocalAsAscii(*COptions::Get(), file, s.server.GetType())) {
 			impl_->type_label_->SetLabel(_("Entered file would transfer as ASCII"));
 		}
 		else {

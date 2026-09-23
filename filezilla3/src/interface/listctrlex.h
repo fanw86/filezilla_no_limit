@@ -1,8 +1,8 @@
 #ifndef FILEZILLA_INTERFACE_LISTCTRLEX_HEADER
 #define FILEZILLA_INTERFACE_LISTCTRLEX_HEADER
 
-#include "Options.h"
 #include "systemimagelist.h"
+#include "Options.h"
 
 #include <libfilezilla/time.hpp>
 
@@ -14,13 +14,12 @@ typedef wxNavigationEnabled<wxListCtrl> wxListCtrlExBase;
 #else
 typedef wxListCtrl wxListCtrlExBase;
 #endif
-
 class wxListCtrlEx : public wxListCtrlExBase, public CSystemImageList
 {
 public:
 	typedef int Item;
 
-	wxListCtrlEx(COptionsBase & options, wxWindow *parent,
+	wxListCtrlEx(wxWindow *parent,
 		wxWindowID id = wxID_ANY,
 		const wxPoint& pos = wxDefaultPosition,
 		const wxSize& size = wxDefaultSize,
@@ -51,8 +50,8 @@ public:
 
 	// LoadColumnSettings needs to be called exactly once after adding
 	// all columns
-	void LoadColumnSettings(interfaceOptions widthsOptionId, interfaceOptions visibilityOptionId, interfaceOptions sortOptionId);
-	void SaveColumnSettings(interfaceOptions widthsOptionId, interfaceOptions visibilityOptionId, interfaceOptions sortOptionId);
+	void LoadColumnSettings(COptionsBase & options, interfaceOptions widthsOptionId, interfaceOptions visibilityOptionId, interfaceOptions sortOptionId);
+	void SaveColumnSettings(COptionsBase & options, interfaceOptions widthsOptionId, interfaceOptions visibilityOptionId, interfaceOptions sortOptionId);
 
 	int GetColumnVisibleIndex(int col) const;
 	int GetColumnActualIndex(int col) const;
@@ -96,8 +95,6 @@ public:
 	}
 
 protected:
-	COptionsBase & options_;
-
 	virtual void OnPostScroll();
 	virtual void OnPreEmitPostScrollEvent() final;
 	void EmitPostScrollEvent();
@@ -144,8 +141,8 @@ private:
 	fz::datetime m_prefixSearch_lastKeyPress;
 	wxString m_prefixSearch_prefix;
 
-	void ReadColumnWidths(interfaceOptions optionId);
-	void SaveColumnWidths(interfaceOptions optionId);
+	bool ReadColumnWidths(COptionsBase & options, interfaceOptions optionId);
+	void SaveColumnWidths(COptionsBase & options, interfaceOptions optionId);
 
 	void CreateVisibleColumnMapping();
 

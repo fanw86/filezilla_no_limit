@@ -342,7 +342,7 @@ CRemoteListView::CRemoteListView(CView* pParent, CState& state, CQueueView* pQue
 	AddColumn(_("Last modified"), wxLIST_FORMAT_LEFT, widths[3]);
 	AddColumn(_("Permissions"), wxLIST_FORMAT_LEFT, widths[4]);
 	AddColumn(_("Owner/Group"), wxLIST_FORMAT_LEFT, widths[5]);
-	LoadColumnSettings(OPTION_REMOTEFILELIST_COLUMN_WIDTHS, OPTION_REMOTEFILELIST_COLUMN_SHOWN, OPTION_REMOTEFILELIST_COLUMN_ORDER);
+	LoadColumnSettings(options_, OPTION_REMOTEFILELIST_COLUMN_WIDTHS, OPTION_REMOTEFILELIST_COLUMN_SHOWN, OPTION_REMOTEFILELIST_COLUMN_ORDER);
 
 	m_dirIcon = GetIconIndex(iconType::dir);
 	SetImageList(GetSystemImageList(), wxIMAGE_LIST_SMALL);

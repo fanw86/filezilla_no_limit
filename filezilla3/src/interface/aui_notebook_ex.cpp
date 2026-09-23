@@ -80,9 +80,8 @@ typedef wxAuiGenericTabArt TabArtBase;
 class wxAuiTabArtEx : public TabArtBase
 {
 public:
-	wxAuiTabArtEx(COptionsBase& options, wxAuiNotebookEx* pNotebook, std::shared_ptr<wxAuiTabArtExData> const& data)
-		: options_(options)
-		, m_pNotebook(pNotebook)
+	wxAuiTabArtEx(wxAuiNotebookEx* pNotebook, std::shared_ptr<wxAuiTabArtExData> const& data)
+		: m_pNotebook(pNotebook)
 		, m_data(data)
 	{
 
@@ -93,7 +92,7 @@ public:
 
 	virtual wxAuiTabArt* Clone() override
 	{
-		wxAuiTabArtEx *art = new wxAuiTabArtEx(options_, m_pNotebook, m_data);
+		wxAuiTabArtEx *art = new wxAuiTabArtEx(m_pNotebook, m_data);
 		art->SetNormalFont(m_normalFont);
 		art->SetSelectedFont(m_selectedFont);
 		art->SetMeasuringFont(m_measuringFont);
@@ -189,7 +188,7 @@ protected:
 
 	void PrepareIcons()
 	{
-		wxSize canvas(CThemeProvider::Get()->GetIconSize(options_, IconSize::small));
+		wxSize canvas(CThemeProvider::Get()->GetIconSize(iconSizeSmall));
 		wxSize size = canvas;
 		size.Scale(0.75, 0.75);
 
@@ -208,7 +207,6 @@ protected:
 	}
 #endif
 
-	COptionsBase & options_;
 	wxAuiNotebookEx* m_pNotebook;
 
 	std::shared_ptr<wxAuiTabArtExData> m_data;
@@ -218,11 +216,6 @@ BEGIN_EVENT_TABLE(wxAuiNotebookEx, wxAuiNotebook)
 EVT_AUINOTEBOOK_PAGE_CHANGED(wxID_ANY, wxAuiNotebookEx::OnPageChanged)
 EVT_AUINOTEBOOK_DRAG_MOTION(wxID_ANY, wxAuiNotebookEx::OnTabDragMotion)
 END_EVENT_TABLE()
-
-wxAuiNotebookEx::wxAuiNotebookEx(COptionsBase& options)
-	: options_(options)
-{
-}
 
 void wxAuiNotebookEx::OnTabDragMotion(wxAuiNotebookEvent& evt)
 {
@@ -245,7 +238,7 @@ void wxAuiNotebookEx::RemoveExtraBorders()
 
 void wxAuiNotebookEx::SetExArtProvider()
 {
-	SetArtProvider(new wxAuiTabArtEx(options_, this, std::make_shared<wxAuiTabArtExData>()));
+	SetArtProvider(new wxAuiTabArtEx(this, std::make_shared<wxAuiTabArtExData>()));
 }
 
 bool wxAuiNotebookEx::SetPageText(size_t page_idx, const wxString& text)

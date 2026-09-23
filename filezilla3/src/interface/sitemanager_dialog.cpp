@@ -311,17 +311,13 @@ bool CSiteManagerDialog::Create(wxWindow* parent, std::vector<_connected_site>* 
 	main->AddGrowableCol(0);
 	main->AddGrowableRow(0);
 
-	// Preserve each side's natural minimum and split additional width equally.
-	auto sides = lay.createFlex(2, 1);
-	sides->AddGrowableCol(0);
-	sides->AddGrowableCol(1);
-	sides->AddGrowableRow(0);
+	auto sides = new wxBoxSizer(wxHORIZONTAL);
 	main->Add(sides, lay.grow)->SetProportion(1);
 
 	auto left = lay.createFlex(1);
 	left->AddGrowableCol(0);
 	left->AddGrowableRow(1);
-	sides->Add(left, lay.grow);
+	sides->Add(left, lay.grow)->SetProportion(1);
 
 	left->Add(new wxStaticText(this, wxID_ANY, _("&Select entry:")));
 
@@ -355,7 +351,7 @@ bool CSiteManagerDialog::Create(wxWindow* parent, std::vector<_connected_site>* 
 	buttons->Add(cancel);
 
 	// Now create the imagelist for the site tree
-	wxSize s = CThemeProvider::GetIconSize(options_, IconSize::small);
+	wxSize s = CThemeProvider::GetIconSize(iconSizeSmall);
 	wxImageList* pImageList = new wxImageList(s.x, s.y);
 
 	pImageList->Add(CThemeProvider::Get()->CreateBitmap(_T("ART_FOLDERCLOSED"), wxART_OTHER, s, true));
@@ -366,7 +362,7 @@ bool CSiteManagerDialog::Create(wxWindow* parent, std::vector<_connected_site>* 
 	tree_->AssignImageList(pImageList);
 
 	auto right = new wxBoxSizer(wxVERTICAL);
-	sides->Add(right, lay.grow);
+	sides->Add(right, 1, wxLEFT|wxGROW, lay.gap);
 
 	m_pNotebook_Site = new CSiteManagerSite(options_);
 	if (!m_pNotebook_Site->Load(this)) {
@@ -377,8 +373,12 @@ bool CSiteManagerDialog::Create(wxWindow* parent, std::vector<_connected_site>* 
 
 	Layout();
 
-	GetSizer()->SetMinSize(GetSizer()->GetMinSize());
-	GetSizer()->Fit(this);
+	wxSize minSize = GetSizer()->GetMinSize();
+
+	wxSize size = GetSize();
+	wxSize clientSize = GetClientSize();
+	SetMinSize(GetSizer()->GetMinSize() + size - clientSize);
+	SetClientSize(minSize);
 
 	{
 		// Load bookmark notebook
@@ -409,25 +409,6 @@ bool CSiteManagerDialog::Create(wxWindow* parent, std::vector<_connected_site>* 
 		tree_->SafeSelectItem(m_ownSites);
 	}
 	SetCtrlState();
-
-	// On GTK the decorations and control sizes are not final until the window
-	// has been shown. SetSizeHints arranges for the fitting size to be applied
-	// again at that point.
-	GetSizer()->SetSizeHints(this);
-
-#ifdef __WXGTK__
-	// Frame extents can arrive asynchronously after the pending size hints have
-	// been applied. Reapply the client minimum once they are known.
-	Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
-		if (IsShown()) {
-			wxSize const minSize = GetSizer()->GetMinSize();
-			if (GetMinClientSize() != minSize) {
-				SetMinClientSize(minSize);
-			}
-		}
-		event.Skip();
-	});
-#endif
 
 	m_pWindowStateManager = new CWindowStateManager(this, options_);
 	m_pWindowStateManager->Restore(OPTION_SITEMANAGER_POSITION);

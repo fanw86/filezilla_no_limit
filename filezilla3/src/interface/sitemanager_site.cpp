@@ -93,6 +93,7 @@ bool CSiteManagerSite::Load(wxWindow* parent, bool with_comments_and_color)
 
 		int const charsetPageIndex = FindPage(charsetPage_);
 		m_charsetPageText = GetPageText(charsetPageIndex);
+		wxGetApp().GetWrapEngine()->WrapRecursive(charsetPage_, 1.3);
 	}
 
 	{
@@ -159,16 +160,6 @@ bool CSiteManagerSite::Load(wxWindow* parent, bool with_comments_and_color)
 
 	for (auto & c : controls_) {
 		c->UpdateWidth(width);
-	}
-
-	// Wrap all pages to a common width, taking each page's constraints into
-	// account during the search.
-	std::vector<wxWindow*> pages;
-	for (size_t i = 0; i < GetPageCount(); ++i) {
-		pages.push_back(GetPage(i));
-	}
-	if (!pages.empty()) {
-		wxGetApp().GetWrapEngine()->WrapRecursive(pages, 1.3, "", wxSize(), wxSize(width, -1));
 	}
 
 	return true;

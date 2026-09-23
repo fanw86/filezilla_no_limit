@@ -65,7 +65,7 @@ CQuickconnectBar::CQuickconnectBar(CMainFrame & parent)
 	connect->SetDefault();
 	connectSizer->Add(connect, wxSizerFlags().Align(wxALIGN_CENTER_VERTICAL));
 
-	wxBitmap bmp = CThemeProvider::Get()->CreateBitmap(L"ART_DROPDOWN", wxART_OTHER, IconSize::tiny);
+	wxBitmap bmp = CThemeProvider::Get()->CreateBitmap(L"ART_DROPDOWN", wxART_OTHER, CThemeProvider::GetIconSize(iconSizeTiny));
 	auto flags = wxSizerFlags().Expand();
 #if defined(__WXMSW__)
 	wxSize dropdownSize = ConvertDialogToPixels(wxSize(12, -1));

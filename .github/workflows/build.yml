@@ -75,10 +75,19 @@ jobs:
 
       - name: Build FileZilla + NSIS setup
         run: |
+          set -o pipefail
           export PREFIX="$(cygpath -u "${GITHUB_WORKSPACE}")/.ci-deps/prefix"
           export OUT_DIR="$(cygpath -u "${GITHUB_WORKSPACE}")/dist"
           export WITH_SHELLEXT=1
-          bash scripts/ci/build-windows.sh
+          bash scripts/ci/build-windows.sh 2>&1 | tee build-windows.log
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-log
+          path: build-windows.log
+          if-no-files-found: ignore
 
       - name: Upload Windows setup
         uses: actions/upload-artifact@v4
@@ -149,10 +158,19 @@ jobs:
 
       - name: Build FileZilla + NSIS setup
         run: |
+          set -o pipefail
           export PREFIX="$(cygpath -u "${GITHUB_WORKSPACE}")/.ci-deps/prefix"
           export OUT_DIR="$(cygpath -u "${GITHUB_WORKSPACE}")/dist"
           export WITH_SHELLEXT=0
-          bash scripts/ci/build-windows.sh
+          bash scripts/ci/build-windows.sh 2>&1 | tee build-windows.log
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-log-no-shellext
+          path: build-windows.log
+          if-no-files-found: ignore
 
       - name: Upload Windows setup (no shell ext)
         uses: actions/upload-artifact@v4
@@ -195,9 +213,18 @@ jobs:
 
       - name: Build FileZilla
         run: |
+          set -o pipefail
           export PREFIX="${GITHUB_WORKSPACE}/.ci-deps/prefix"
           export OUT_DIR="${GITHUB_WORKSPACE}/dist"
-          bash scripts/ci/build-linux.sh
+          bash scripts/ci/build-linux.sh 2>&1 | tee build-linux.log
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build-log
+          path: build-linux.log
+          if-no-files-found: ignore
 
       - name: Upload Linux tarball
         uses: actions/upload-artifact@v4

@@ -907,7 +907,8 @@ namespace {
 }
 
 CQueueViewBase::CQueueViewBase(CQueue* parent, COptionsBase & options, TimeFormatter & time_formatter, login_manager & lim, int index, const wxString& title)
-	: wxListCtrlEx(options, parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxCLIP_CHILDREN | wxLC_REPORT | wxLC_VIRTUAL | border | wxTAB_TRAVERSAL)
+	: wxListCtrlEx(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxCLIP_CHILDREN | wxLC_REPORT | wxLC_VIRTUAL | border | wxTAB_TRAVERSAL)
+	, options_(options)
 	, time_formatter_(time_formatter)
 	, login_manager_(lim)
 	, m_pageIndex(index)
@@ -916,12 +917,12 @@ CQueueViewBase::CQueueViewBase(CQueue* parent, COptionsBase & options, TimeForma
 	m_pQueue = parent;
 
 	// Create and assign the image list for the queue
-	wxSize s = CThemeProvider::GetIconSize(options_, IconSize::small);
+	wxSize s = CThemeProvider::GetIconSize(iconSizeSmall);
 	wxImageList* pImageList = new wxImageList(s.x, s.y);
 
-	pImageList->Add(CThemeProvider::Get()->CreateBitmap(_T("ART_SERVER"), wxART_OTHER, IconSize::small, true));
-	pImageList->Add(CThemeProvider::Get()->CreateBitmap(_T("ART_FILE"), wxART_OTHER, IconSize::small, true));
-	pImageList->Add(CThemeProvider::Get()->CreateBitmap(_T("ART_FOLDER"), wxART_OTHER, IconSize::small, true));
+	pImageList->Add(CThemeProvider::Get()->CreateBitmap(_T("ART_SERVER"), wxART_OTHER, CThemeProvider::GetIconSize(iconSizeSmall), true));
+	pImageList->Add(CThemeProvider::Get()->CreateBitmap(_T("ART_FILE"), wxART_OTHER, CThemeProvider::GetIconSize(iconSizeSmall), true));
+	pImageList->Add(CThemeProvider::Get()->CreateBitmap(_T("ART_FOLDER"), wxART_OTHER, CThemeProvider::GetIconSize(iconSizeSmall), true));
 
 	AssignImageList(pImageList, wxIMAGE_LIST_SMALL);
 
@@ -1348,7 +1349,7 @@ void CQueueViewBase::CreateColumns(std::vector<ColumnId> const& extraColumns)
 		AddQueueColumn(id);
 	}
 
-	LoadColumnSettings(OPTION_QUEUE_COLUMN_WIDTHS, OPTIONS_NUM, OPTIONS_NUM);
+	LoadColumnSettings(options_, OPTION_QUEUE_COLUMN_WIDTHS, OPTIONS_NUM, OPTIONS_NUM);
 }
 
 CServerItem* CQueueViewBase::GetServerItem(Site const& site)
@@ -1638,7 +1639,6 @@ void CQueueViewBase::OnExport(wxCommandEvent&)
 // ------
 
 CQueue::CQueue(wxWindow* parent, CMainFrame *pMainFrame, CAsyncRequestQueue *pAsyncRequestQueue, login_manager & lim, cert_store & certStore)
-	: wxAuiNotebookEx(pMainFrame->GetOptions())
 {
 	Create(parent, -1, wxDefaultPosition, wxDefaultSize, wxNO_BORDER | wxAUI_NB_BOTTOM);
 	SetExArtProvider();

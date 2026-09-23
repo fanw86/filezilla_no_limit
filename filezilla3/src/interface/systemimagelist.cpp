@@ -10,8 +10,6 @@
 #include "graphics.h"
 #endif
 
-#include "Options.h"
-
 wxImageListEx::wxImageListEx()
 	: wxImageList()
 {
@@ -39,8 +37,7 @@ static void OverlaySymlink(wxBitmap& bmp)
 }
 #endif
 
-CSystemImageList::CSystemImageList(COptionsBase & options, int size)
-	: options_(options)
+CSystemImageList::CSystemImageList(int size)
 {
 	if (size != -1) {
 		CreateSystemImageList(size);
@@ -56,8 +53,8 @@ bool CSystemImageList::CreateSystemImageList(int size)
 #ifdef __WXMSW__
 
 	UINT sizeFlag = SHGFI_SMALLICON;
-	if (size != CThemeProvider::GetIconSize(IconSize::small).x) {
-		size = (size != CThemeProvider::GetIconSize(IconSize::normal).x);
+	if (size != CThemeProvider::GetIconSize(iconSizeSmall).x) {
+		size = (size != CThemeProvider::GetIconSize(iconSizeNormal).x);
 		sizeFlag = SHGFI_ICON;
 	}
 
@@ -215,7 +212,7 @@ int CSystemImageList::GetIconIndex(iconType type, std::wstring const& fileName, 
 		wxIcon newIcon(loc);
 
 		if (newIcon.Ok()) {
-			wxBitmap bmp = PrepareIcon(newIcon, CThemeProvider::GetIconSize(options_, IconSize::small));
+			wxBitmap bmp = PrepareIcon(newIcon, CThemeProvider::GetIconSize(iconSizeSmall));
 			if (symlink) {
 				OverlaySymlink(bmp);
 			}

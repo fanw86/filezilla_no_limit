@@ -4,11 +4,10 @@
 #include <wx/event.h>
 #include <wx/timer.h>
 
-class COptionsBase;
 class CLed final : public wxWindow
 {
 public:
-	CLed(COptionsBase & options, wxWindow *parent, unsigned int index);
+	CLed(wxWindow *parent, unsigned int index);
 
 	void Set();
 	void Set(bool lit);

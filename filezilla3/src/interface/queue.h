@@ -360,6 +360,7 @@ protected:
 
 	void DisplayNumberQueuedFiles();
 
+	COptionsBase& options_;
 	TimeFormatter& time_formatter_;
 	login_manager& login_manager_;
 

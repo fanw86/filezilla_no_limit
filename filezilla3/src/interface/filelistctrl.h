@@ -631,6 +631,7 @@ private:
 	void OnKeyDown(wxKeyEvent& event);
 	void OnColorChange(wxSysColourChangedEvent & ev);
 
+	COptionsBase& options_;
 	TimeFormatter & time_formatter_;
 
 	std::unique_ptr<CFileListCtrlSortBase> sortComparisonObject_;

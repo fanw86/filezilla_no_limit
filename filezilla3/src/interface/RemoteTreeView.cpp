@@ -231,7 +231,7 @@ END_EVENT_TABLE()
 
 CRemoteTreeView::CRemoteTreeView(wxWindow* parent, wxWindowID id, CState& state, CQueueView* pQueue, COptionsBase & options, login_manager & lim)
 	: wxTreeCtrlEx(parent, id, wxDefaultPosition, wxDefaultSize, DEFAULT_TREE_STYLE | wxTAB_TRAVERSAL | wxTR_EDIT_LABELS | wxNO_BORDER | wxTR_HIDE_ROOT)
-	, CSystemImageList(options, CThemeProvider::GetIconSize(options, IconSize::small).x)
+	, CSystemImageList(CThemeProvider::GetIconSize(iconSizeSmall).x)
 	, CStateEventHandler(state)
 	, COptionChangeEventHandler(this)
 	, login_manager_(lim)
@@ -457,7 +457,7 @@ wxBitmap CRemoteTreeView::CreateIcon(int index, const wxString& overlay)
 	}
 
 	if (!bmp.IsOk()) {
-		bmp.Create(CThemeProvider::GetIconSize(options_, IconSize::small));
+		bmp.Create(CThemeProvider::GetIconSize(iconSizeSmall));
 	}
 
 	return bmp;

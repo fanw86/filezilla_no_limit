@@ -24,7 +24,7 @@ enum widgets
 class wxStatusBarEx : public wxStatusBar
 {
 public:
-	wxStatusBarEx(COptionsBase & options, wxTopLevelWindow* parent);
+	wxStatusBarEx(wxTopLevelWindow* parent);
 	virtual ~wxStatusBarEx();
 
 	// We override these for two reasons:
@@ -45,7 +45,6 @@ public:
 #endif
 
 protected:
-	COptionsBase & options_;
 	int GetFieldIndex(int field);
 
 	wxTopLevelWindow* m_pParent;
@@ -64,7 +63,7 @@ protected:
 class CWidgetsStatusBar : public wxStatusBarEx
 {
 public:
-	CWidgetsStatusBar(COptionsBase & options, wxTopLevelWindow* parent);
+	CWidgetsStatusBar(wxTopLevelWindow* parent);
 	virtual ~CWidgetsStatusBar();
 
 	// Adds a child window that gets repositioned on window resize
@@ -125,6 +124,7 @@ protected:
 
 	void DoDisplayQueueSize();
 
+	COptionsBase& options_;
 	TimeFormatter & time_formatter_;
 
 	SizeFormat m_sizeFormat;

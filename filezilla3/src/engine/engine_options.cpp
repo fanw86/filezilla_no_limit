@@ -56,7 +56,6 @@ unsigned int register_engine_options()
 		{ "FTP Proxy login sequence", L"", option_flags::normal },
 		{ "SFTP keyfiles", L"", option_flags::platform },
 		{ "SFTP compression", false, option_flags::normal },
-		{ "SFTP use agent", true, option_flags::normal },
 		{ "Proxy type", 0, option_flags::normal, 0, 3 },
 		{ "Proxy host", L"", option_flags::normal },
 		{ "Proxy port", 0, option_flags::normal, 1, 65535 },

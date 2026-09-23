@@ -37,7 +37,7 @@ CRecursiveOperationStatus::CRecursiveOperationStatus(wxWindow* parent, CState& s
 	SetSize(size);
 
 	// Position stop button
-	wxBitmap bmp = CThemeProvider::Get()->CreateBitmap(_T("ART_CANCEL"), wxART_OTHER, IconSize::subnormal);
+	wxBitmap bmp = CThemeProvider::Get()->CreateBitmap(_T("ART_CANCEL"), wxART_OTHER, CThemeProvider::GetIconSize(iconSize24, false));
 	wxSize s = bmp.GetScaledSize();
 	s.IncBy(2);
 	s.IncBy(s.GetHeight() / 2);

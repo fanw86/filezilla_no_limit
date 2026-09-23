@@ -32,7 +32,7 @@ CToolBar::CToolBar(CMainFrame& mainFrame, COptions& options)
                 iconSize_.Scale(scale, scale);
 	}
 #else
-	iconSize_ = CThemeProvider::GetIconSize(options_, IconSize::small, true);
+	iconSize_ = CThemeProvider::GetIconSize(iconSizeSmall, true);
 	SetToolBitmapSize(iconSize_);
 #endif
 
@@ -123,8 +123,8 @@ bool CToolBar::Realize()
 	}
 
 	wxASSERT(iconSize_.x > 0 && iconSize_.y > 0);
-	auto toolImages = std::make_unique<wxImageList>(iconSize_.x, IconSize_.y, false, 0);
-	auto disabledToolImages = std::make_unique<wxImageList>(iconSize_.x, IconSize_.y, false, 0);
+	auto toolImages = std::make_unique<wxImageList>(iconSize_.x, iconSize_.y, false, 0);
+	auto disabledToolImages = std::make_unique<wxImageList>(iconSize_.x, iconSize_.y, false, 0);
 
 	HWND hwnd = GetHandle();
 

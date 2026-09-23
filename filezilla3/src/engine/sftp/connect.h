@@ -42,7 +42,6 @@ public:
 	void ask_key_password(bool repeated);
 	void set_keyfile_password(std::string const& pw);
 	void set_password(std::string const& pw);
-	void set_interactive_responses(std::vector<std::string> const& responses);
 
 private:
 	void set_keys_loaded();
@@ -62,13 +61,7 @@ private:
 	uint8_t retry_counter_{};
 	bool keys_loaded_{};
 	bool tried_pw_{};
-	enum class interactive_state {
-		unused,
-		requested,
-		tried
-	};
-	interactive_state tried_interactive_{};
-
+	bool tried_interactive_{};
 	bool tried_key_{};
 };
 

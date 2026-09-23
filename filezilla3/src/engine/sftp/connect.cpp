@@ -114,12 +114,6 @@ bool CSftpConnectOpData::load_keys()
 		}
 	}
 
-	if (!options_.get_bool(OPTION_SFTP_USE_AGENT)) {
-		log(logmsg::debug_info, "Use of SSH has been disabled");
-		set_keys_loaded();
-		return false;
-	}
-
 	fz::ssh::agent_compatibility_flags flags{};
 #ifdef USE_MAC_SANDBOX
 	flags |= fz::ssh::agent_compatibility_flags::suppress_agent_connection_error;
@@ -169,12 +163,11 @@ void CSftpConnectOpData::on_auth_requested(fz::ssh::session*, std::string const&
 	methods_ = methods;
 
 	if (!is_continuation) {
-		if (tried_key_ || tried_pw_ || tried_interactive_ != interactive_state::unused) {
+		if (tried_key_ || tried_pw_ || tried_interactive_) {
 			log(logmsg::reply, _("Authentication failed"));
-			if (tried_interactive_ == interactive_state::tried && method_ == "keyboard-interactive"sv) {
+			if (tried_interactive_ && method_ == "keyboard-interactive"sv) {
 				if (++retry_counter_ < 3) {
-					tried_pw_ = tried_key_ = false;
-					tried_interactive_ = interactive_state::unused;
+					tried_pw_ = tried_key_ = tried_interactive_ = false;
 					log(logmsg::debug_warning, L"Server rejected entered response. Starting over authentication from scratch."sv);
 				}
 			}
@@ -182,8 +175,7 @@ void CSftpConnectOpData::on_auth_requested(fz::ssh::session*, std::string const&
 				keys_.pop_back();
 				if (!keys_.empty()) {
 					log(logmsg::debug_info, L"Starting over authentication with next available public key"sv);
-					tried_pw_ = tried_key_ = false;
-					tried_interactive_ = interactive_state::unused;
+					tried_pw_ = tried_key_ = tried_interactive_ = false;
 				}
 			}
 		}
@@ -229,8 +221,8 @@ void CSftpConnectOpData::next_auth()
 		}
 	}
 
-	if (controlSocket_.credentials_.logonType_ != LogonType::anonymous && method_available(methods_, "keyboard-interactive"sv) && tried_interactive_ == interactive_state::unused) {
-		tried_interactive_ = interactive_state::requested;
+	if (controlSocket_.credentials_.logonType_ != LogonType::anonymous && method_available(methods_, "keyboard-interactive"sv) && !tried_interactive_) {
+		tried_interactive_ = true;
 		log(logmsg::command, _("Requesting keyboard-interactive authentication"));
 		method_ = "keyboard-interactive"sv;
 		controlSocket_.ssh_->auth_keyboard_interactive();
@@ -303,7 +295,7 @@ void CSftpConnectOpData::set_keys_loaded()
 
 	keys_loaded_ = true;
 	used_keys_.clear();
-	log(logmsg::debug_info, fztranslate("Loaded %u distinct key", "Loaded %u distinct keys", keys_.size()), keys_.size());
+	log(logmsg::debug_info, _("Loaded %u distinct keys"), keys_.size());
 
 	std::reverse(keys_.begin(), keys_.end());
 }
@@ -388,8 +380,7 @@ void CSftpConnectOpData::on_auth_signature_failed(fz::ssh::session*)
 	keys_.pop_back();
 	if (!keys_.empty()) {
 		log(logmsg::debug_info, L"Starting over authentication with next available public key");
-		tried_pw_ = tried_key_ = false;
-		tried_interactive_ = interactive_state::unused;
+		tried_pw_ = tried_key_ = tried_interactive_ = false;
 	}
 	next_auth();
 }
@@ -410,7 +401,7 @@ bool CSftpConnectOpData::interactive_prompt_asks_for_password(std::string_view p
 
 void CSftpConnectOpData::on_auth_keyboard_interactive_prompt(fz::ssh::session*, std::string const& name, std::string const& instruction, std::vector<fz::ssh::keyboard_interactive_prompt> & prompts)
 {
-	if (tried_interactive_ == interactive_state::unused) {
+	if (!tried_interactive_) {
 		trigger_reset(FZ_REPLY_INTERNALERROR|FZ_REPLY_DISCONNECTED);
 		return;
 	}
@@ -418,7 +409,6 @@ void CSftpConnectOpData::on_auth_keyboard_interactive_prompt(fz::ssh::session*, 
 	if (prompts.size() == 1 && prompts[0].prompt_ == "TOTP: "sv && controlSocket_.ssh_->peer_identification().find("_FileZillaProEnterpriseServer_"sv) != std::string::npos) {
 		auto req = std::make_unique<OtpRequest>(currentServer_, controlSocket_.GetHandle());
 		controlSocket_.SendAsyncRequest(std::move(req));
-		tried_interactive_ = interactive_state::tried;
 		return;
 	}
 
@@ -429,7 +419,6 @@ void CSftpConnectOpData::on_auth_keyboard_interactive_prompt(fz::ssh::session*, 
 			trigger_reset(FZ_REPLY_CRITICALERROR | FZ_REPLY_DISCONNECTED | FZ_REPLY_PASSWORDFAILED);
 		}
 		else {
-			// As this password isn't changing, don't set tried_interactive to interactive_state::tried
 			tried_pw_ = true;
 			log(logmsg::status, _("The server does not support password authentication, but sent a single keyboard-interactive prompt named \"%s\". Sending password as response. Select interactive login type to force an interactive prompt."), prompts[0].prompt_);
 			log(logmsg::command, _("Sending password as response"));
@@ -441,18 +430,9 @@ void CSftpConnectOpData::on_auth_keyboard_interactive_prompt(fz::ssh::session*, 
 		return;
 	}
 
-	log(logmsg::reply, fztranslate("Received %u keyboard-interactive prompt.", "Received %u keyboard-interactive prompts.", prompts.size()), prompts.size());
-
 	auto req = std::make_unique<CInteractiveLoginNotification>(currentServer_, controlSocket_.GetHandle());
 	req->name_ = name;
 	req->instruction_ = instruction;
 	req->prompts_ = std::move(prompts);
 	controlSocket_.SendAsyncRequest(std::move(req));
-}
-
-void CSftpConnectOpData::set_interactive_responses(std::vector<std::string> const& responses)
-{
-	tried_interactive_ = interactive_state::tried;
-	log(logmsg::command, L"Sending keyboard-interactive reply");
-	controlSocket_.ssh_->auth_keyboard_interactive_response(responses);
 }

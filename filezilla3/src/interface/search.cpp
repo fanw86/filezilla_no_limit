@@ -168,7 +168,7 @@ CSearchDialogFileList::CSearchDialogFileList(CSearchDialog* pParent, CQueueView*
 	AddColumn(_("Last modified"), wxLIST_FORMAT_LEFT, widths[4]);
 	AddColumn(_("Permissions"), wxLIST_FORMAT_LEFT, widths[5]);
 	AddColumn(_("Owner/Group"), wxLIST_FORMAT_LEFT, widths[6]);
-	LoadColumnSettings(OPTION_SEARCH_COLUMN_WIDTHS, OPTION_SEARCH_COLUMN_SHOWN, OPTION_SEARCH_COLUMN_ORDER);
+	LoadColumnSettings(options_, OPTION_SEARCH_COLUMN_WIDTHS, OPTION_SEARCH_COLUMN_SHOWN, OPTION_SEARCH_COLUMN_ORDER);
 
 	InitSort(OPTION_SEARCH_SORTORDER);
 }

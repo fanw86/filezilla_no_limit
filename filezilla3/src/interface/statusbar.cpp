@@ -28,8 +28,7 @@ BEGIN_EVENT_TABLE(wxStatusBarEx, wxStatusBar)
 EVT_SIZE(wxStatusBarEx::OnSize)
 END_EVENT_TABLE()
 
-wxStatusBarEx::wxStatusBarEx(COptionsBase & options, wxTopLevelWindow* pParent)
-	: options_(options)
+wxStatusBarEx::wxStatusBarEx(wxTopLevelWindow* pParent)
 {
 	m_pParent = pParent;
 	m_columnWidths = 0;
@@ -96,7 +95,7 @@ void wxStatusBarEx::SetStatusWidths(int n, const int *widths)
 	for (int i = 0; i < n; ++i) {
 		m_columnWidths[i] = widths[i];
 	}
-	m_columnWidths[n - 1] += CThemeProvider::GetIconSize(options_, IconSize::small).GetWidth();
+	m_columnWidths[n - 1] += CThemeProvider::GetIconSize(iconSizeSmall).GetWidth();
 #ifdef __WXMSW__
 	m_columnWidths[n - 1] -= 18; // Internal magic constant of wx, it doesn't UI scale :(
 #endif
@@ -156,10 +155,10 @@ void wxStatusBarEx::OnSize(wxSizeEvent&)
 			m_parentWasMaximized = isMaximized;
 
 			if (isMaximized) {
-				m_columnWidths[count - 1] -= CThemeProvider::GetIconSize(IconSize::small).GetWidth();
+				m_columnWidths[count - 1] -= CThemeProvider::GetIconSize(iconSizeSmall).GetWidth();
 			}
 			else {
-				m_columnWidths[count - 1] += CThemeProvider::GetIconSize(IconSize::small).GetWidth();
+				m_columnWidths[count - 1] += CThemeProvider::GetIconSize(iconSizeSmall).GetWidth();
 			}
 
 			wxStatusBar::SetStatusWidths(count, m_columnWidths);
@@ -195,8 +194,8 @@ BEGIN_EVENT_TABLE(CWidgetsStatusBar, wxStatusBarEx)
 EVT_SIZE(CWidgetsStatusBar::OnSize)
 END_EVENT_TABLE()
 
-CWidgetsStatusBar::CWidgetsStatusBar(COptionsBase& options, wxTopLevelWindow* parent)
-	: wxStatusBarEx(options, parent)
+CWidgetsStatusBar::CWidgetsStatusBar(wxTopLevelWindow* parent)
+	: wxStatusBarEx(parent)
 {
 }
 
@@ -320,8 +319,9 @@ EVT_TIMER(wxID_ANY, CStatusBar::OnTimer)
 END_EVENT_TABLE()
 
 CStatusBar::CStatusBar(wxTopLevelWindow* pParent, activity_logger& al, COptionsBase& options, TimeFormatter & time_formatter)
-	: CWidgetsStatusBar(options, pParent)
+	: CWidgetsStatusBar(pParent)
 	, COptionChangeEventHandler(this)
+	, options_(options)
 	, time_formatter_(time_formatter)
 	, activity_logger_(al)
 {
@@ -356,8 +356,8 @@ CStatusBar::CStatusBar(wxTopLevelWindow* pParent, activity_logger& al, COptionsB
 
 	UpdateSizeFormat();
 
-	activityLeds_[0] = new CLed(options_, this, 0);
-	activityLeds_[1] = new CLed(options_, this, 1);
+	activityLeds_[0] = new CLed(this, 0);
+	activityLeds_[1] = new CLed(this, 1);
 	activityLeds_[0]->Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent&) { UpdateActivityTooltip(); });
 	activityLeds_[1]->Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent&) { UpdateActivityTooltip(); });
 
@@ -441,7 +441,7 @@ void CStatusBar::DisplayDataType()
 			desc = _("Current transfer type is set to automatic detection.");
 		}
 
-		wxSize const s = CThemeProvider::GetIconSize(options_, IconSize::small);
+		wxSize const s = CThemeProvider::GetIconSize(iconSizeSmall);
 		wxBitmap bmp = CThemeProvider::Get()->CreateBitmap(name, wxART_OTHER, s);
 		SetFieldBitmap(widget_datatype, m_pDataTypeIndicator, bmp, s);
 		m_pDataTypeIndicator->SetToolTip(desc);
@@ -498,7 +498,7 @@ void CStatusBar::DisplayEncrypted()
 		}
 	}
 	else {
-		wxSize const s = CThemeProvider::GetIconSize(options_, IconSize::small);
+		wxSize const s = CThemeProvider::GetIconSize(iconSizeSmall);
 		wxBitmap bmp = CThemeProvider::Get()->CreateBitmap(L"ART_LOCK", wxART_OTHER, s);
 		SetFieldBitmap(widget_encryption, m_pEncryptionIndicator, bmp, s);
 		m_pEncryptionIndicator->SetToolTip(_("The connection is encrypted. Click icon for details."));
@@ -600,7 +600,7 @@ void CStatusBar::UpdateSpeedLimitsIcon()
 {
 	bool enable = options_.get_int(OPTION_SPEEDLIMIT_ENABLE) != 0;
 
-	auto const s = CThemeProvider::GetIconSize(options_, IconSize::small);
+	auto const s = CThemeProvider::GetIconSize(iconSizeSmall);
 	wxBitmap bmp = CThemeProvider::Get()->CreateBitmap(L"ART_SPEEDLIMITS", wxART_OTHER, s);
 	if (!bmp.Ok()) {
 		return;

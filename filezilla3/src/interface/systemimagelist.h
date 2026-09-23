@@ -31,11 +31,10 @@ public:
 #endif
 };
 
-class COptionsBase;
 class CSystemImageList
 {
 public:
-	CSystemImageList(COptionsBase & options, int size = -1);
+	CSystemImageList(int size = -1);
 	virtual ~CSystemImageList();
 
 	CSystemImageList(CSystemImageList const&) = delete;
@@ -52,7 +51,6 @@ public:
 #endif
 
 private:
-	COptionsBase & options_;
 	wxImageListEx *m_pImageList{};
 
 #ifndef __WXMSW__
