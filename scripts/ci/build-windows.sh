@@ -98,15 +98,14 @@ sed -i \
 	-e "s|$SRC|$(cygpath -w "$SRC" | sed 's#\\#/#g')|g" \
 	data/install.nsi
 
-# NSIS 3 resolves plugins in <plugindir>/<arch> and the flat data/ layout is
-# NSIS 2 style, so "Plugin not found, cannot call UAC::_" results. Stage the
-# bundled plugin DLLs (Unicode builds) in a build-local dir and point
-# !addplugindir at it with the explicit unicode-arch flag.
-mkdir -p data/nsis-plugins
-cp "$SRC/data/UAC.dll" "$SRC/data/INetC.dll" "$SRC/data/nsis_appid.dll" data/nsis-plugins/
-sed -i \
-	"s|!addplugindir.*|!addplugindir /x86-unicode \"$(cygpath -w "$BUILD/data/nsis-plugins" | sed 's#\\#/#g')\"|" \
-	data/install.nsi
+# NSIS 3 resolves plugins per target architecture; FileZilla's flat data/
+# layout (UAC.dll etc. directly next to UAC.nsh) is NSIS 2 style and is not
+# searched, resulting in "Plugin not found, cannot call UAC::_". Install
+# the bundled Unicode plugin DLLs into the plugin directory makensis
+# actually searches (the one it lists in its "Plugin directories" output).
+NSIS_PLUGIN_DIR="/mingw64/share/nsis/Plugins/unicode"
+mkdir -p "$NSIS_PLUGIN_DIR"
+cp "$SRC/data/UAC.dll" "$SRC/data/INetC.dll" "$SRC/data/nsis_appid.dll" "$NSIS_PLUGIN_DIR/"
 
 makensis data/install.nsi
 
