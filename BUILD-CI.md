@@ -20,7 +20,8 @@ scripts/ci/build-linux.sh                   # FileZilla + tarball
 
 ```bash
 pacman -S --needed base-devel curl tar xz zip autoconf automake libtool make \
-  gettext-devel pkgconf meson ninja nsis \
+  gettext pkgconf meson ninja \
+  mingw-w64-x86_64-nsis \
   mingw-w64-x86_64-toolchain mingw-w64-x86_64-wxwidgets3.2-msw \
   mingw-w64-x86_64-nettle mingw-w64-x86_64-gnutls \
   mingw-w64-x86_64-sqlite3 mingw-w64-x86_64-zlib mingw-w64-x86_64-gettext \
