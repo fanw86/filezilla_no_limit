@@ -89,6 +89,15 @@ if [[ ! -f data/install.nsi ]]; then
 	exit 1
 fi
 
+# makensis is a native Windows binary and cannot read the MSYS2 POSIX paths
+# that configure substitutes for @srcdir@/@top_srcdir@ in install.nsi
+# (e.g. '!include "/d/a/.../data\process_running.nsh"'). Rewrite them to
+# Windows form. Replace the longer srcdir prefix first.
+sed -i \
+	-e "s|$SRC/data|$(cygpath -w "$SRC/data" | sed 's#\\#/#g')|g" \
+	-e "s|$SRC|$(cygpath -w "$SRC" | sed 's#\\#/#g')|g" \
+	data/install.nsi
+
 makensis data/install.nsi
 
 SETUP="$(find . -maxdepth 3 \( -name 'FileZilla_*setup*.exe' -o -name 'FileZilla_3_setup.exe' \) -print -quit)"

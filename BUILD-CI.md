@@ -41,5 +41,6 @@ Set `WITH_SHELLEXT=0` to skip the 32-bit shell extension (faster).
 
 - Dependency versions are pinned in the workflow env (`LIBFILEZILLA_VERSION`, `FZSSH_VERSION`).
 - Build steps tee their output to `build-windows.log` / `build-linux.log`, uploaded as workflow artifacts when a job fails (see the `if: failure()` steps in the workflow) so failures are debuggable without API access.
+- `build-windows.sh` rewrites the MSYS2 POSIX paths that configure substitutes for `@srcdir@`/`@top_srcdir@` in the generated `data/install.nsi` into Windows paths before invoking the native `makensis`.
 - `deps/` vendors `libfilezilla`, `fzssh`, and `nettle` tarballs so CI is self-contained (fzssh needs nettle ≥ 3.10; Ubuntu 24.04 only has 3.9).
 - Transfer concurrency limit is raised 10 → 999 (see the patch file).
