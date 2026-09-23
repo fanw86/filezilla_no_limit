@@ -4,3 +4,4 @@
 *.yaml text eol=lf
 deps/*.tar.xz binary
 deps/*.tar.gz binary
+deps/*.zip binary

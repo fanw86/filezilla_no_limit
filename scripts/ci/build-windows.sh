@@ -30,6 +30,7 @@ fi
 log() { echo "==> $*"; }
 
 SRC="$(cd "$SOURCE_DIR" && pwd)"
+REPO_ROOT="$(cd "$SOURCE_DIR/.." && pwd)"
 BUILD="$SRC/compile"
 mkdir -p "$OUT_DIR"
 OUT="$(cd "$OUT_DIR" && pwd)"
@@ -98,25 +99,22 @@ sed -i \
 	-e "s|$SRC|$(cygpath -w "$SRC" | sed 's#\\#/#g')|g" \
 	data/install.nsi
 
-# NSIS 3 resolves plugins per target architecture; FileZilla's flat data/
-# layout (UAC.dll etc. directly next to UAC.nsh) is NSIS 2 style and is not
-# searched, resulting in "Plugin not found, cannot call UAC::_". Install
-# the bundled Unicode plugin DLLs into the plugin directory makensis
-# actually searches (the one it lists in its "Plugin directories" output).
-NSIS_PLUGIN_DIR="/mingw64/share/nsis/Plugins/unicode"
-mkdir -p "$NSIS_PLUGIN_DIR"
-cp "$SRC/data/UAC.dll" "$SRC/data/INetC.dll" "$SRC/data/nsis_appid.dll" "$NSIS_PLUGIN_DIR/"
+# Use the official 32-bit NSIS vendored in deps/. MSYS2's mingw-w64 nsis
+# targets amd64-unicode and silently rejects FileZilla's 32-bit plugin DLLs
+# ("Plugin not found, cannot call UAC::_"); upstream also ships the installer
+# as a 32-bit executable. FileZilla's plugin DLLs go in Plugins/x86-unicode.
+NSIS_VERSION="${NSIS_VERSION:-3.12}"
+NSIS_HOME="$BUILD/nsis-bin"
+if [[ ! -x "$NSIS_HOME/Bin/makensis.exe" ]]; then
+	rm -rf "$NSIS_HOME"
+	mkdir -p "$NSIS_HOME"
+	python -m zipfile -e "$REPO_ROOT/deps/nsis-${NSIS_VERSION}.zip" "$NSIS_HOME/"
+	mv "$NSIS_HOME/nsis-${NSIS_VERSION}"/* "$NSIS_HOME/"
+	rm -rf "$NSIS_HOME/nsis-${NSIS_VERSION}"
+fi
+cp "$SRC/data/UAC.dll" "$SRC/data/INetC.dll" "$SRC/data/nsis_appid.dll" "$NSIS_HOME/Plugins/x86-unicode/"
 
-# Temporary diagnostics: makensis still reports "Plugin not found" even with
-# the DLLs in its listed plugin dir. Capture exactly what this makensis
-# build supports and sees (goes into the build log artifact on failure).
-log "NSIS diagnostics"
-makensis /VERSION || true
-makensis /CMDHELP !addplugindir || true
-ls -la "$NSIS_PLUGIN_DIR" || true
-ls -la /mingw64/share/nsis/Plugins/ || true
-
-makensis /V4 data/install.nsi
+"$NSIS_HOME/Bin/makensis.exe" data/install.nsi
 
 SETUP="$(find . -maxdepth 3 \( -name 'FileZilla_*setup*.exe' -o -name 'FileZilla_3_setup.exe' \) -print -quit)"
 if [[ -z "$SETUP" || ! -f "$SETUP" ]]; then
