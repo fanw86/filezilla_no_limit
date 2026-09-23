@@ -38,4 +38,5 @@ Set `WITH_SHELLEXT=0` to skip the 32-bit shell extension (faster).
 ## Notes
 
 - Dependency versions are pinned in the workflow env (`LIBFILEZILLA_VERSION`, `FZSSH_VERSION`).
+- `deps/` vendors `libfilezilla` and `fzssh` tarballs so CI does not depend on filezilla-project.org (which may bot-block runners).
 - Transfer concurrency limit is raised 10 → 999 (see the patch file).
