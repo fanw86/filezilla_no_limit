@@ -54,6 +54,7 @@ jobs:
             mingw-w64-x86_64-gettext
             mingw-w64-x86_64-python
             mingw-w64-x86_64-argon2
+            mingw-w64-x86_64-boost
             mingw-w64-i686-toolchain
 
       - name: Cache dependencies
@@ -128,6 +129,7 @@ jobs:
             mingw-w64-x86_64-gettext
             mingw-w64-x86_64-python
             mingw-w64-x86_64-argon2
+            mingw-w64-x86_64-boost
 
       - name: Cache dependencies
         id: cache-deps
