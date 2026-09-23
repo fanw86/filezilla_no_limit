@@ -38,5 +38,5 @@ Set `WITH_SHELLEXT=0` to skip the 32-bit shell extension (faster).
 ## Notes
 
 - Dependency versions are pinned in the workflow env (`LIBFILEZILLA_VERSION`, `FZSSH_VERSION`).
-- `deps/` vendors `libfilezilla` and `fzssh` tarballs so CI does not depend on filezilla-project.org (which may bot-block runners).
+- `deps/` vendors `libfilezilla`, `fzssh`, and `nettle` tarballs so CI is self-contained (fzssh needs nettle ≥ 3.10; Ubuntu 24.04 only has 3.9).
 - Transfer concurrency limit is raised 10 → 999 (see the patch file).

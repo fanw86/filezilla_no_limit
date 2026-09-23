@@ -51,6 +51,10 @@ jobs:
             mingw-w64-x86_64-sqlite3
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-gettext
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-libargon2
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-libargon2
             mingw-w64-i686-toolchain
 
       - name: Cache dependencies
@@ -60,7 +64,7 @@ jobs:
           path: |
             ${{ github.workspace }}/.ci-deps/prefix
             ${{ github.workspace }}/.ci-deps/src
-          key: win64-deps-${{ env.LIBFILEZILLA_VERSION }}-${{ env.FZSSH_VERSION }}-v1
+          key: win64-deps-${{ env.LIBFILEZILLA_VERSION }}-${{ env.FZSSH_VERSION }}-nettle310-v2
 
       - name: Build libfilezilla and fzssh
         if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -122,6 +126,8 @@ jobs:
             mingw-w64-x86_64-sqlite3
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-gettext
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-libargon2
 
       - name: Cache dependencies
         id: cache-deps
@@ -130,7 +136,7 @@ jobs:
           path: |
             ${{ github.workspace }}/.ci-deps/prefix
             ${{ github.workspace }}/.ci-deps/src
-          key: win64-deps-${{ env.LIBFILEZILLA_VERSION }}-${{ env.FZSSH_VERSION }}-v1
+          key: win64-deps-${{ env.LIBFILEZILLA_VERSION }}-${{ env.FZSSH_VERSION }}-nettle310-v2
 
       - name: Build libfilezilla and fzssh
         if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -166,6 +172,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential autoconf automake libtool gettext pkg-config \
             libwxgtk3.2-dev nettle-dev libgnutls28-dev \
+            libgmp-dev libargon2-dev \
             libsqlite3-dev zlib1g-dev meson ninja-build xz-utils
 
       - name: Cache dependencies
@@ -175,7 +182,7 @@ jobs:
           path: |
             ${{ github.workspace }}/.ci-deps/prefix
             ${{ github.workspace }}/.ci-deps/src
-          key: linux-deps-${{ env.LIBFILEZILLA_VERSION }}-${{ env.FZSSH_VERSION }}-v1
+          key: linux-deps-${{ env.LIBFILEZILLA_VERSION }}-${{ env.FZSSH_VERSION }}-nettle310-v2
 
       - name: Build libfilezilla and fzssh
         if: steps.cache-deps.outputs.cache-hit != 'true'

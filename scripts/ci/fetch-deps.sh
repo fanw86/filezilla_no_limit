@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Download (if needed) and build libfilezilla + libfzssh.
+# Download (if needed) and build nettle, libfilezilla and libfzssh into PREFIX.
 # Prefer vendored tarballs in deps/ so CI does not depend on filezilla-project.org.
 set -euo pipefail
 
@@ -9,13 +9,17 @@ WORKERS="${WORKERS:-$(nproc 2>/dev/null || echo 2)}"
 
 LIBFILEZILLA_VERSION="${LIBFILEZILLA_VERSION:-0.57.0}"
 FZSSH_VERSION="${FZSSH_VERSION:-1.4.0}"
+NETTLE_VERSION="${NETTLE_VERSION:-3.10}"
 
-# Repo-relative deps dir (works from workspace root or scripts/ci)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DEPS_DIR="${DEPS_DIR:-$REPO_ROOT/deps}"
 
 mkdir -p "$PREFIX" "$SRC_ROOT" "$DEPS_DIR"
+# On MSYS2 MinGW, meson must run under MinGW python, not MSYS python.
+if [[ -d /mingw64/bin ]]; then
+	export PATH="/mingw64/bin:$PATH"
+fi
 export PATH="$PREFIX/bin:$PATH"
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
@@ -31,43 +35,62 @@ curl_fetch() {
 		"$@"
 }
 
-# Resolve tarball path: prefer deps/, else download via download.php scrape.
+# $1 name, $2 version, $3 filename, $4 optional download URL
 resolve_tarball() {
-	local name="$1" version="$2" page="$3"
-	local tarball="${name}-${version}.tar.xz"
-	local dest="$DEPS_DIR/$tarball"
+	local name="$1" version="$2" filename="$3" url="${4:-}"
+	local dest="$DEPS_DIR/$filename"
 
 	if [[ -f "$dest" && -s "$dest" ]]; then
-		log "Using vendored $tarball"
+		log "Using vendored $filename"
 		printf '%s\n' "$dest"
 		return 0
 	fi
-
-	# Also accept a previously downloaded copy in SRC_ROOT
-	if [[ -f "$SRC_ROOT/$tarball" && -s "$SRC_ROOT/$tarball" ]]; then
-		log "Using cached $tarball"
-		printf '%s\n' "$SRC_ROOT/$tarball"
+	if [[ -f "$SRC_ROOT/$filename" && -s "$SRC_ROOT/$filename" ]]; then
+		log "Using cached $filename"
+		printf '%s\n' "$SRC_ROOT/$filename"
 		return 0
 	fi
 
-	log "Fetching download page for $name $version ($page)"
-	local html url
-	if ! html="$(curl_fetch "$page")"; then
-		fail "cannot fetch $page (network or bot-block). Place $tarball in deps/ and retry."
-	fi
-
-	url="$(printf '%s\n' "$html" | grep -oE 'https://[^"]+/'"$tarball"'[^"]*' | head -n1 || true)"
-	if [[ -z "$url" ]]; then
-		fail "no download link for $tarball on $page (page layout changed or blocked). Place $tarball in deps/ and retry."
-	fi
-
-	log "Downloading $url"
-	if ! curl_fetch -o "$dest" "$url"; then
+	if [[ -n "$url" ]]; then
+		log "Downloading $url"
+		if curl_fetch -o "$dest" "$url"; then
+			printf '%s\n' "$dest"
+			return 0
+		fi
 		rm -f "$dest"
-		fail "download of $tarball failed. Place $tarball in deps/ and retry."
 	fi
 
-	printf '%s\n' "$dest"
+	fail "missing $filename (expected in deps/). Download it and place it under deps/."
+}
+
+need_system_nettle_upgrade() {
+	# fzssh meson requires nettle >= 3.10
+	local ver
+	ver="$(pkg-config --modversion nettle 2>/dev/null || echo 0)"
+	log "System/prefix nettle version: ${ver:-none}"
+	pkg-config --exists 'nettle >= 3.10' 2>/dev/null && return 1
+	return 0
+}
+
+build_nettle() {
+	local tarball="$1" version="$2"
+	local srcdir="$SRC_ROOT/nettle-${version}"
+
+	if [[ ! -d "$srcdir" ]]; then
+		log "Extracting $(basename "$tarball")"
+		if [[ "$tarball" == *.tar.gz ]]; then
+			tar -C "$SRC_ROOT" -xzf "$tarball"
+		else
+			tar -C "$SRC_ROOT" -xf "$tarball"
+		fi
+	fi
+
+	log "Building nettle $version"
+	pushd "$srcdir" >/dev/null
+	./configure --prefix="$PREFIX" --enable-shared --disable-static
+	make -j"$WORKERS"
+	make install
+	popd >/dev/null
 }
 
 build_autotools_dep() {
@@ -103,11 +126,19 @@ build_meson_dep() {
 
 	log "Building $name $version (meson)"
 	pushd "$srcdir" >/dev/null
-	meson setup build \
-		--prefix="$PREFIX" \
-		--libdir=lib \
-		--buildtype=release \
-		--default-library=shared
+	# On MSYS2, invoke meson via MinGW python so it does not reject the environment.
+	if [[ -x /mingw64/bin/python3.exe || -x /mingw64/bin/python3 ]]; then
+		/mingw64/bin/python3 -c 'import mesonbuild' 2>/dev/null \
+			&& /mingw64/bin/python3 -m mesonbuild.mesonmain setup build \
+				--prefix="$PREFIX" --libdir=lib --buildtype=release --default-library=shared \
+			|| meson setup build --prefix="$PREFIX" --libdir=lib --buildtype=release --default-library=shared
+	else
+		meson setup build \
+			--prefix="$PREFIX" \
+			--libdir=lib \
+			--buildtype=release \
+			--default-library=shared
+	fi
 	meson compile -C build -j "$WORKERS"
 	meson install -C build
 	popd >/dev/null
@@ -119,17 +150,26 @@ main() {
 	log "DEPS_DIR=$DEPS_DIR"
 	log "WORKERS=$WORKERS"
 
+	# Nettle >= 3.10 is required by fzssh; Ubuntu 24.04 only ships 3.9.x.
+	if need_system_nettle_upgrade; then
+		local nettle_tb
+		nettle_tb="$(resolve_tarball nettle "$NETTLE_VERSION" "nettle-${NETTLE_VERSION}.tar.gz" \
+			"https://ftp.gnu.org/gnu/nettle/nettle-${NETTLE_VERSION}.tar.gz")"
+		build_nettle "$nettle_tb" "$NETTLE_VERSION"
+	else
+		log "nettle >= 3.10 already available, skipping source build"
+	fi
+
 	local lfz_tb fzssh_tb
 
-	lfz_tb="$(resolve_tarball libfilezilla "$LIBFILEZILLA_VERSION" \
-		"https://lib.filezilla-project.org/download.php")"
+	lfz_tb="$(resolve_tarball libfilezilla "$LIBFILEZILLA_VERSION" "libfilezilla-${LIBFILEZILLA_VERSION}.tar.xz")"
 	build_autotools_dep "$lfz_tb" libfilezilla "$LIBFILEZILLA_VERSION"
 
-	fzssh_tb="$(resolve_tarball fzssh "$FZSSH_VERSION" \
-		"https://fzssh.filezilla-project.org/download.php")"
+	fzssh_tb="$(resolve_tarball fzssh "$FZSSH_VERSION" "fzssh-${FZSSH_VERSION}.tar.xz")"
 	build_meson_dep "$fzssh_tb" fzssh "$FZSSH_VERSION"
 
 	log "Dependencies installed under $PREFIX"
+	pkg-config --modversion nettle >&2
 	pkg-config --modversion libfilezilla >&2
 	pkg-config --modversion libfzssh-client >&2
 }
