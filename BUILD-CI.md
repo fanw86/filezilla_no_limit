@@ -44,3 +44,6 @@ Set `WITH_SHELLEXT=0` to skip the 32-bit shell extension (faster).
 - The installer is built with the official 32-bit NSIS 3.12 vendored as `deps/nsis-3.12.zip` (extracted by `build-windows.sh` at build time). MSYS2's `mingw-w64-x86_64-nsis` cannot be used: it targets amd64-unicode and rejects FileZilla's 32-bit plugin DLLs (`UAC.dll`, `INetC.dll`, `nsis_appid.dll`).
 - `deps/` vendors `libfilezilla`, `fzssh`, and `nettle` tarballs so CI is self-contained (fzssh needs nettle ≥ 3.10; Ubuntu 24.04 only has 3.9).
 - Transfer concurrency limit is raised 10 → 999 (see the patch file).
+- Tag builds (`v*`) create a GitHub Release with only the install packages attached
+  (`*-setup.exe`, `*-portable.zip`, `*.tar.xz`); intermediate files like the bare
+  `filezilla.exe` are uploaded as workflow artifacts but excluded from the release.
