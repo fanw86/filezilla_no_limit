@@ -107,7 +107,16 @@ NSIS_PLUGIN_DIR="/mingw64/share/nsis/Plugins/unicode"
 mkdir -p "$NSIS_PLUGIN_DIR"
 cp "$SRC/data/UAC.dll" "$SRC/data/INetC.dll" "$SRC/data/nsis_appid.dll" "$NSIS_PLUGIN_DIR/"
 
-makensis data/install.nsi
+# Temporary diagnostics: makensis still reports "Plugin not found" even with
+# the DLLs in its listed plugin dir. Capture exactly what this makensis
+# build supports and sees (goes into the build log artifact on failure).
+log "NSIS diagnostics"
+makensis /VERSION || true
+makensis /CMDHELP !addplugindir || true
+ls -la "$NSIS_PLUGIN_DIR" || true
+ls -la /mingw64/share/nsis/Plugins/ || true
+
+makensis /V4 data/install.nsi
 
 SETUP="$(find . -maxdepth 3 \( -name 'FileZilla_*setup*.exe' -o -name 'FileZilla_3_setup.exe' \) -print -quit)"
 if [[ -z "$SETUP" || ! -f "$SETUP" ]]; then
