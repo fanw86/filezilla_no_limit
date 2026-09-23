@@ -126,21 +126,22 @@ build_meson_dep() {
 
 	log "Building $name $version (meson)"
 	pushd "$srcdir" >/dev/null
-	# On MSYS2, invoke meson via MinGW python so it does not reject the environment.
-	if [[ -x /mingw64/bin/python3.exe || -x /mingw64/bin/python3 ]]; then
-		/mingw64/bin/python3 -c 'import mesonbuild' 2>/dev/null \
-			&& /mingw64/bin/python3 -m mesonbuild.mesonmain setup build \
-				--prefix="$PREFIX" --libdir=lib --buildtype=release --default-library=shared \
-			|| meson setup build --prefix="$PREFIX" --libdir=lib --buildtype=release --default-library=shared
-	else
-		meson setup build \
-			--prefix="$PREFIX" \
-			--libdir=lib \
-			--buildtype=release \
-			--default-library=shared
+	local meson_cmd=(meson)
+	# On MSYS2 MinGW, force meson to run under MinGW python (msys python is rejected).
+	if [[ -x /mingw64/bin/python3 ]]; then
+		local meson_py
+		meson_py="$(command -v meson || true)"
+		if [[ -n "$meson_py" ]]; then
+			meson_cmd=(/mingw64/bin/python3 "$meson_py")
+		fi
 	fi
-	meson compile -C build -j "$WORKERS"
-	meson install -C build
+	"${meson_cmd[@]}" setup build \
+		--prefix="$PREFIX" \
+		--libdir=lib \
+		--buildtype=release \
+		--default-library=shared
+	"${meson_cmd[@]}" compile -C build -j "$WORKERS"
+	"${meson_cmd[@]}" install -C build
 	popd >/dev/null
 }
 
