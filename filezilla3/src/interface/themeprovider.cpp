@@ -609,6 +609,15 @@ double CThemeProvider::GetUIScaleFactor(COptionsBase & options)
 	}
 }
 
+double CThemeProvider::GetUIScaleFactor()
+{
+	auto* t = Get();
+	if (!t) {
+		return 1.;
+	}
+	return GetUIScaleFactor(t->options_);
+}
+
 wxStaticBitmap* CThemeProvider::createStaticBitmap(wxWindow* parent, std::wstring const& name, IconSize s)
 {
 	auto const size = CThemeProvider::GetIconSize(options_, s);

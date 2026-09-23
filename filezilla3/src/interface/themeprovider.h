@@ -98,6 +98,8 @@ public:
 
 	// Note: Always 1 on OS X
 	static double GetUIScaleFactor(COptionsBase & options);
+	// Uses the CThemeProvider singleton's options
+	static double GetUIScaleFactor();
 
 	static CThemeProvider* Get();
 
