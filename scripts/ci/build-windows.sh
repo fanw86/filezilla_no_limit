@@ -15,8 +15,8 @@ WITH_SHELLEXT="${WITH_SHELLEXT:-1}"
 WORKERS="${WORKERS:-$(nproc 2>/dev/null || echo 2)}"
 
 export PATH="$PREFIX/bin:/mingw64/bin:/mingw32/bin:$PATH"
-export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-export LD_LIBRARY_PATH="$PREFIX/lib:/mingw64/bin:${LD_LIBRARY_PATH:-}"
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PREFIX/lib64/pkgconfig:/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+export LD_LIBRARY_PATH="$PREFIX/lib:$PREFIX/lib64:/mingw64/bin:${LD_LIBRARY_PATH:-}"
 export LC_ALL=C
 
 # MSYS2 windres is missing the target prefix some autotools checks expect.

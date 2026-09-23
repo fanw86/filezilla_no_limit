@@ -21,8 +21,9 @@ if [[ -d /mingw64/bin ]]; then
 	export PATH="/mingw64/bin:$PATH"
 fi
 export PATH="$PREFIX/bin:$PATH"
-export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+# nettle may install into lib64; always search both so pkg-config prefers PREFIX.
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$PREFIX/lib64/pkgconfig:${PKG_CONFIG_PATH:-}"
+export LD_LIBRARY_PATH="$PREFIX/lib:$PREFIX/lib64:${LD_LIBRARY_PATH:-}"
 export LC_ALL=C
 
 # IMPORTANT: log to stderr so command substitutions only capture real return values.
@@ -87,7 +88,7 @@ build_nettle() {
 
 	log "Building nettle $version"
 	pushd "$srcdir" >/dev/null
-	./configure --prefix="$PREFIX" --enable-shared --disable-static
+	./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" --enable-shared --disable-static
 	make -j"$WORKERS"
 	make install
 	popd >/dev/null
@@ -109,7 +110,7 @@ build_autotools_dep() {
 	elif [[ ! -f ./configure ]]; then
 		autoreconf -fi
 	fi
-	./configure --prefix="$PREFIX" --enable-shared --disable-static
+	./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" --enable-shared --disable-static
 	make -j"$WORKERS"
 	make install
 	popd >/dev/null
