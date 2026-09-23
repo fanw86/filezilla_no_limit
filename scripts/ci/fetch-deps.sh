@@ -127,22 +127,17 @@ build_meson_dep() {
 
 	log "Building $name $version (meson)"
 	pushd "$srcdir" >/dev/null
-	local meson_cmd=(meson)
-	# On MSYS2 MinGW, force meson to run under MinGW python (msys python is rejected).
-	if [[ -x /mingw64/bin/python3 ]]; then
-		local meson_py
-		meson_py="$(command -v meson || true)"
-		if [[ -n "$meson_py" ]]; then
-			meson_cmd=(/mingw64/bin/python3 "$meson_py")
-		fi
+	# Prefer MinGW meson (/mingw64/bin/meson) on Windows; MSYS meson rejects MinGW env.
+	if [[ -x /mingw64/bin/meson || -x /mingw64/bin/meson.exe ]]; then
+		export PATH="/mingw64/bin:$PATH"
 	fi
-	"${meson_cmd[@]}" setup build \
+	meson setup build \
 		--prefix="$PREFIX" \
 		--libdir=lib \
 		--buildtype=release \
 		--default-library=shared
-	"${meson_cmd[@]}" compile -C build -j "$WORKERS"
-	"${meson_cmd[@]}" install -C build
+	meson compile -C build -j "$WORKERS"
+	meson install -C build
 	popd >/dev/null
 }
 

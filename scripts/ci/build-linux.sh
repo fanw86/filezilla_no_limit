@@ -24,6 +24,8 @@ BUILD="$SRC/compile"
 OUT="$(mkdir -p "$OUT_DIR" && cd "$OUT_DIR" && pwd)"
 
 log "Running autoreconf in $SRC"
+# automake requires these SUBDIRS/DIST_SUBDIRS paths to exist
+mkdir -p "$SRC/src/fzshellext/32" "$SRC/src/fzshellext/64"
 pushd "$SRC" >/dev/null
 autoreconf -fi
 popd >/dev/null
