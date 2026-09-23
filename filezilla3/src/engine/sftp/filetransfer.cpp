@@ -328,7 +328,7 @@ int CSftpFileTransferOpData::Reset(int result)
 void CSftpFileTransferOpData::cleanup_segments()
 {
 	for (auto & seg : segments_) {
-		if (auto * channel = segment_channel(seg)) {
+		if (auto * channel = segment_channel(*seg)) {
 			channel->cancel(seg.get());
 			if (!seg->handle_.empty()) {
 				channel->close(nullptr, seg->handle_);
@@ -764,13 +764,13 @@ bool CSftpFileTransferOpData::read_segment_manifest(uint64_t total)
 
 	std::string data;
 	data.resize(static_cast<size_t>(size));
-	int64_t read = 0;
-	while (read < size) {
-		int64_t const r = f.read(data.data() + read, size - read);
-		if (r <= 0) {
+	size_t read = 0;
+	while (read < data.size()) {
+		auto const r = f.read2(data.data() + read, data.size() - read);
+		if (!r || !r.value_) {
 			return false;
 		}
-		read += r;
+		read += r.value_;
 	}
 
 	auto parse_pair = [](std::string_view line, uint64_t & a, uint64_t & b) {
@@ -837,11 +837,11 @@ bool CSftpFileTransferOpData::write_segment_manifest(uint64_t total)
 
 	size_t written = 0;
 	while (written < data.size()) {
-		int64_t const w = f.write(data.data() + written, static_cast<int64_t>(data.size() - written));
-		if (w <= 0) {
+		auto const w = f.write2(data.data() + written, data.size() - written);
+		if (!w || !w.value_) {
 			return false;
 		}
-		written += static_cast<size_t>(w);
+		written += w.value_;
 	}
 	return true;
 }
@@ -1323,7 +1323,7 @@ void CSftpFileTransferOpData::start_concat()
 
 	for (auto & seg : segments_) {
 		if (!seg->handle_.empty()) {
-			if (auto * channel = segment_channel(seg)) {
+			if (auto * channel = segment_channel(*seg)) {
 				channel->close(nullptr, seg->handle_);
 			}
 			seg->handle_.clear();
