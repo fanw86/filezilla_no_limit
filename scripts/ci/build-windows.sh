@@ -98,6 +98,16 @@ sed -i \
 	-e "s|$SRC|$(cygpath -w "$SRC" | sed 's#\\#/#g')|g" \
 	data/install.nsi
 
+# NSIS 3 resolves plugins in <plugindir>/<arch> and the flat data/ layout is
+# NSIS 2 style, so "Plugin not found, cannot call UAC::_" results. Stage the
+# bundled plugin DLLs (Unicode builds) in a build-local dir and point
+# !addplugindir at it with the explicit unicode-arch flag.
+mkdir -p data/nsis-plugins
+cp "$SRC/data/UAC.dll" "$SRC/data/INetC.dll" "$SRC/data/nsis_appid.dll" data/nsis-plugins/
+sed -i \
+	"s|!addplugindir.*|!addplugindir /x86-unicode \"$(cygpath -w "$BUILD/data/nsis-plugins" | sed 's#\\#/#g')\"|" \
+	data/install.nsi
+
 makensis data/install.nsi
 
 SETUP="$(find . -maxdepth 3 \( -name 'FileZilla_*setup*.exe' -o -name 'FileZilla_3_setup.exe' \) -print -quit)"
